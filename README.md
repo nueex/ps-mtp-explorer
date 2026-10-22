@@ -59,7 +59,7 @@
 
 ### Install and open
 
-Download **`PS-MTP-Explorer-1.02.pkg`** from [Releases](https://github.com/nueex/ps-mtp-explorer/releases/latest) and install it using GoldHEN's package installer. Then:
+Download **`PS-MTP-Explorer-1.00.pkg`** from [Releases](https://github.com/nueex/ps-mtp-explorer/releases/latest) and install it using GoldHEN's package installer. Then:
 
 1. **Connect your phone via USB.** Unlock it and select File Transfer / MTP.
 2. **Launch PS MTP Explorer.** Choose your phone, USB drive or internal storage.
