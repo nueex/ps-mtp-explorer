@@ -134,6 +134,12 @@ Phone package installation requires free internal storage for both the package a
 The compiled application is distributed through GitHub Releases. This repository contains release documentation and assets; the application source is not published here. Required third-party notices and corresponding runtime materials accompany the release separately.
 </details>
 
+<details>
+<summary><strong>Where is the project's source code?</strong></summary>
+
+The source code will be published in the future.
+</details>
+
 ## Feedback
 
 [Open an issue](https://github.com/nueex/ps-mtp-explorer/issues) with your PS4 firmware/GoldHEN version, phone model and Android version if relevant, the storage source/destination, and steps to reproduce the issue. Include the error shown on screen.
