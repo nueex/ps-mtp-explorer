@@ -5,13 +5,13 @@
 <h1 align="center">PS MTP Explorer</h1>
 <p align="center"><strong>Your phone. Your USB drive. Your PS4. One file explorer.</strong><br>by nueex</p>
 
-> **Project summary:** ps-mtp-explorer is a PS4 homebrew utility by nueex for direct Android to PS4 USB file transfers and offline PKG installation. Browse your phone over MTP, move files between phone, USB drive and internal HDD, and install packages without a PC, FTP server or local network setup.
+> **Project summary:** ps-mtp-explorer is a PS4 homebrew utility by nueex for direct Android to PS4 USB file transfers, with support for direct PKG installation. Browse your phone over MTP, move files between phone, USB drive and internal HDD, and install packages without a PC, FTP server or local network setup.
 
 <p align="center">
   <a href="https://github.com/nueex/ps-mtp-explorer/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/nueex/ps-mtp-explorer?style=for-the-badge&color=8b5cf6"></a>
   <img alt="Platform: PS4 homebrew" src="https://img.shields.io/badge/PS4-Homebrew-006FCD?style=for-the-badge">
   <img alt="Connection: USB MTP" src="https://img.shields.io/badge/USB-MTP-22c55e?style=for-the-badge">
-  <img alt="Works offline" src="https://img.shields.io/badge/Works-Offline-06b6d4?style=for-the-badge">
+  <img alt="Supports PKG installation" src="https://img.shields.io/badge/Supports-PKG_installation-06b6d4?style=for-the-badge">
   <a href="https://ko-fi.com/S6S01X1LYP"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Support-Ko--fi-ff5e5b?style=for-the-badge&logo=kofi&logoColor=white"></a>
 </p>
 
@@ -34,7 +34,7 @@
 | **Transfers in both directions** | Copy files and complete folder trees from phone to PS4/USB, from PS4/USB to phone, and between writable native storage locations. |
 | **Familiar file actions** | Copy, Move, Paste, Rename, Delete and Properties across your phone, USB drive and internal HDD. |
 | **New Folder** | Create a directory in the current writable location with the on-screen keyboard. |
-| **Offline PKG installation** | Install PKGs from your phone, USB drive or internal HDD. Temporary phone package copies are removed automatically to conserve storage. |
+| **Direct PKG installation** | Supports installing PKGs directly through the app from your phone, USB drive or internal HDD. |
 | **Reliable transfers** | Built-in integrity checks help protect your files during transfers. |
 | **Live updates** | Connected devices and folder contents update automatically as you manage your files. |
 | **Grid, list & details** | Switch views, inspect full paths and file properties, and see supported image previews, package artwork and available media metadata. |
@@ -50,12 +50,12 @@
 
 ### What you need
 
-- A jailbroken **PS4 with GoldHEN active**. See the compatibility note below.
+- A jailbroken **PS4 with GoldHEN active**.
 - A controller and enough free storage for your transfers or installations.
 - For phone access: an **MTP-capable Android phone** and a **USB data cable**. Unlock the phone and choose **File Transfer / Android Auto (MTP)** from its USB options. No companion phone app is required.
 - For USB storage: a drive that your PS4 exposes as a mounted USB storage device.
 
-**Compatibility:** The current download enables its filesystem-access setup on firmware **11.00**. Compatibility with 5.05, 6.72, 9.00 and other 11.xx or later firmware has not been established.
+**Tested on firmware 11.00.**
 
 ### Install and open
 
@@ -82,17 +82,17 @@ Use **Properties** to inspect a file's size, full path and available metadata.
 
 ## Install PKG from Phone to PS4
 
-Highlight a `.pkg`, press **X** and confirm **Install**. The offline PKG installer works with packages stored on your Android phone, USB drive or internal HDD.
+Highlight a `.pkg`, press **X** and confirm **Install**. The app supports direct PKG installation from your Android phone, USB drive or internal HDD.
 
 | Package location | Installation workflow | Source after installation |
 | :--- | :--- | :--- |
 | **Internal storage** | Install directly from the internal HDD. | Original PKG is kept. |
 | **USB storage** | Install directly from the USB drive. | Original PKG is kept. |
-| **Phone over MTP** | Select a PKG on your phone; the app prepares it automatically. | Phone original is kept. Temporary internal copies are removed when the attempt ends. |
+| **Phone over MTP** | Select a PKG on your phone; the app prepares it automatically. | Original PKG on the phone is kept. |
 
 For phone installations, leave enough internal space for **both the temporary PKG and installed content**. Keep the source connected and the app open until installation finishes.
 
-**Fully offline:** connect Android to PS4 over USB and install packages without a PC, FTP server, Wi-Fi or internet connection. GoldHEN must already be active.
+**Package installation:** Select a PKG from your phone, USB drive or internal HDD and install it through the app. GoldHEN must already be active.
 
 ## Controller guide
 
@@ -125,7 +125,7 @@ This release targets phones exposing standard MTP storage. iPhone file access is
 <details>
 <summary><strong>Why does a phone PKG need extra internal space?</strong></summary>
 
-The app temporarily stores the phone package on the internal HDD while installing it, then removes that copy. Your original phone file is kept.
+Phone package installation requires free internal storage for both the package and installed content. Your original phone file is kept.
 </details>
 
 <details>
@@ -154,4 +154,4 @@ See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and the third-party mater
 
 ---
 
-<p align="center"><strong>GoldHEN file manager | PS4 MTP transfer | Android to PS4 USB | Offline PKG installer</strong><br>PS MTP Explorer by nueex</p>
+<p align="center"><strong>GoldHEN file manager | PS4 MTP transfer | Android to PS4 USB | Direct PKG installation</strong><br>PS MTP Explorer by nueex</p>
