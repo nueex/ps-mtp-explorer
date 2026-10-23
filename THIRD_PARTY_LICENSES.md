@@ -1,6 +1,6 @@
 # Third-party notices
 
-PS MTP Explorer includes third-party components with their own terms. This file does not relicense those components. License texts and corresponding OpenOrbis runtime materials are provided in `PS-MTP-Explorer-1.00-Third-Party.zip` alongside the compiled release. Application source is not included in that archive.
+PS MTP Explorer includes third-party components with their own terms. This file does not relicense those components. License texts and corresponding OpenOrbis runtime materials are provided in `PS-MTP-Explorer-1.01-Third-Party.zip` alongside the compiled release. Application source is not included in that archive.
 
 | Component | Attribution and terms |
 | :--- | :--- |

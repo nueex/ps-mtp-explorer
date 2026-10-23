@@ -55,11 +55,13 @@
 - For phone access: an **MTP-capable Android phone** and a **USB data cable**. Unlock the phone and choose **File Transfer / Android Auto (MTP)** from its USB options. No companion phone app is required.
 - For USB storage: a drive that your PS4 exposes as a mounted USB storage device.
 
-**Tested on firmware 11.00.**
+**Tested on PS4 firmware 9.00, 10.01 and 11.00 with GoldHEN active.**
 
 ### Install and open
 
-Download **`PS-MTP-Explorer-1.00.pkg`** from [Releases](https://github.com/nueex/ps-mtp-explorer/releases/latest) and install it using GoldHEN's package installer. Then:
+Download **[PS-MTP-Explorer-1.01.pkg](https://github.com/nueex/ps-mtp-explorer/releases/download/v1.01/PS-MTP-Explorer-1.01.pkg)** and install it using GoldHEN's package installer. Version **1.01** updates the existing `NUEX00001` app; its PS4 `APP_VER` and `VERSION` metadata are **01.01**. The previous [1.00 release](https://github.com/nueex/ps-mtp-explorer/releases/tag/v1.00) remains available.
+
+Then:
 
 1. **Connect your phone via USB.** Unlock it and select File Transfer / MTP.
 2. **Launch PS MTP Explorer.** Choose your phone, USB drive or internal storage.
