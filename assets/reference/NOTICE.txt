@@ -23,6 +23,6 @@ Licensing follow-up (2026-10-26): "QA-only" describes the intended demo use,
 not exclusion from distributed code. The three thumbnail arrays are present in
 src/ps4/reference_assets.inc and referenced by the renderer's asset table.
 Their rights, the supplied title/launcher and the PS4 wordmark remain unresolved.
-assets/explorer.png also depicts these materials. See ../../LICENSING_REVIEW.md
+assets/explorer.png also depicts these materials. See ../../LICENSING.md
 and ../../LICENSING_ASSETS.json for the clearance/replacement map. No new
 license grant or public redistribution permission is asserted by this notice.

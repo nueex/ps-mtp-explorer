@@ -71,8 +71,7 @@ Do not rewrite old tags, packages, archives or their notices to suggest otherwis
 
 ## Separate third-party terms and unresolved distribution rights
 
-See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md),
-[LICENSING_REVIEW.md](LICENSING_REVIEW.md) and the per-asset
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and the per-asset
 [LICENSING_ASSETS.json](LICENSING_ASSETS.json) record.
 
 - **libjbc:** upstream redistribution permission remains unresolved. Credits to
@@ -97,6 +96,88 @@ been cleared for distribution merely by this original-work migration.**
 Obtain the necessary libjbc permissions and resolve excluded artwork, then
 verify corresponding-source/runtime obligations before making a new release.
 This outstanding work does not suspend the GPL grant for nueex's original work.
+
+## libjbc provenance and permission
+
+The integration is based on [bucanero/ps4-libjbc at
+835fe016ff0ae5dd89b9249f39cc0fe093fd07dd](https://github.com/bucanero/ps4-libjbc/tree/835fe016ff0ae5dd89b9249f39cc0fe093fd07dd),
+forked from [sleirsgoevy/ps4-libjbc](https://github.com/sleirsgoevy/ps4-libjbc).
+The pinned source tree has no explicit license file or express source/header
+license grant established by the review dated 2026-10-26. Public availability,
+attribution, inclusion of source and use by other GPL projects do not by
+themselves establish redistribution permission for this dependency.
+
+The relevant upstream contributors identified in its history are:
+
+- **Sergey Lisov / sleirsgoevy:** original implementation, kernel access,
+  process/prison/vnode handling and reference-count fixes.
+- **LightningMods:** Sony credential/capability handling in the merged
+  [PR #1](https://github.com/sleirsgoevy/ps4-libjbc/pull/1), including fields used
+  by this application's access profile and system-module loading.
+- **Damián Parrino / bucanero:** OpenOrbis static-library/public-header
+  integration in [commit 730cdae](https://github.com/bucanero/ps4-libjbc/commit/730cdae2900e86fea163b294764106ee916c7844)
+  and subsequent upstream merges.
+
+These contributions identify prospective permission contacts, not proof of
+current ownership or authority to license other contributors' work. Keep the
+input hashes in [third_party/libjbc/provenance.json](third_party/libjbc/provenance.json)
+and integration-change record in [NOTICE.txt](third_party/libjbc/NOTICE.txt).
+Only `jailbreak.c` and `kernelrw.c` are compiled into the application.
+
+The preferred resolution is an upstream GPL-compatible license or retained
+written grants covering all relevant rights in that pinned code. MIT or
+GPL-3.0-or-later are suitable requests; GPLv3-only material can be used under
+version 3 without becoming available under later versions. Grants must permit
+the intended modification and source/binary redistribution; informal homebrew
+approval or attribution alone is insufficient. Retain the grant, identity,
+covered revision/files and complete license terms. A grant or linking exception
+from nueex cannot supply rights held by libjbc's upstream authors.
+
+The [ps4sdk privilege routines](https://github.com/ps4dev/ps4sdk/blob/4df9d001b66ae4ec07d9a51b62d1e4c5e270eecc/common/kernel/source/kernel/privilege.c)
+and [Payload Guest's removal of libjbc](https://github.com/Al-Azif/ps4-payload-guest/releases/tag/v0.97)
+were investigated as alternatives; neither is a verified drop-in for this app's
+complete filesystem/installer credential profile. Do not remove the library or
+bypass the startup access checks merely to change licensing status. Any
+replacement needs independent provenance/license review and must preserve the
+GoldHEN runtime probe, original Unix ownership, Sony credentials/capabilities,
+prison/vnode lifetime handling, failure checks and all transfer/install functions.
+Host checks alone do not establish console kernel ABI compatibility.
+
+[Apollo Save Tool's GPL notice](https://github.com/bucanero/apollo-ps4/blob/main/README.md#license)
+provides an original-author/version-3-or-later model; it does not grant rights
+to this separate libjbc dependency.
+
+## Artwork and complete-release requirements
+
+The maintainer's ownership confirmation covers original project launcher/title
+artwork and UI/design, as inventoried. It does not license external intellectual
+property. The remaining fixed-asset issues are:
+
+- `assets/icons/ps4-wordmark.png`, the composite `platform.svg` and its raster
+  contain PS4 branding; only the authored gamepad/design portions are covered.
+- `assets/reference/thumb_pkg.png` contains a Bloodborne cover excerpt;
+  `thumb_image.png` and `thumb_video.png` contain scenery without an established
+  ownership/license record. All three are embedded in `reference_assets.inc`,
+  despite their historical QA-only description. No compiler elimination or
+  non-distribution is assumed.
+- `assets/explorer.png` depicts the mixed UI and demo imagery. The generated
+  include and screenshot need corresponding updates if excluded assets change;
+  replacing a PNG alone leaves its old embedded pixels in the executable.
+
+Document adequate permissions for external elements or replace them with cleared
+artwork. Preserve third-party copyright and trademark notices. No live user-file
+preview, transfer or installation capability needs removal to replace fixed
+demo graphics. Current pixels and functionality remain unchanged.
+
+Before distributing a complete source bundle or PS4 release, resolve libjbc and
+external-asset rights, retain all applicable notices, and provide corresponding
+source matching the exact binary revision. Include modified library code,
+required runtime sources, editable inputs and build scripts, plus applicable
+GPLv3 installation information when required. The older third-party archive
+alone is not complete corresponding source for the application. Verify a fresh
+production build, package extraction and supported console behavior if code or
+assets change. Do not assume a system-library exception for libjbc, rewrite
+historical releases, or treat successful compilation as distribution clearance.
 
 ## Packaging and appearance
 

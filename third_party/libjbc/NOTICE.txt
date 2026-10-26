@@ -5,11 +5,12 @@ Pinned origin: https://github.com/bucanero/ps4-libjbc
 Commit: 835fe016ff0ae5dd89b9249f39cc0fe093fd07dd
 Unmodified input file hashes are in provenance.json.
 
-The upstream tree does not provide an explicit license file. This third-party
-code is not covered by the PSMTP MIT license. Attribution and corresponding
-sources are included for this local, personal homebrew preview. No public
-redistribution or upstream licensing permission is asserted by this project.
-See ../../LICENSING_REVIEW.md for the contributor/permission investigation.
+The pinned upstream tree does not provide an explicit license file. Inherited
+libjbc code is excluded from PS MTP Explorer's GPL-3.0-or-later original-work
+grant and remains outside its historical MIT grant. Attribution and source
+availability do not establish upstream redistribution permission; no such
+permission is asserted by this project. See ../../LICENSING.md for the
+contributor/provenance record and unresolved complete-distribution requirements.
 
 Scoped original-work grant (2026-10-26): Original Author: nueex -
 Copyright (C) 2026 nueex, for nueex's independently copyrightable local

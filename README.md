@@ -175,7 +175,7 @@ See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and the third-party mater
 
 The grant covers original application code, project-specific UI/design, authored icons and artwork owned by nueex. Mixed files are covered only for nueex's original contributions. Third-party libraries, OpenOrbis-derived material, fonts, trademarks and externally owned artwork retain their existing terms. No whole-file GPL-3.0-or-later grant is asserted for libjbc or mixed assets.
 
-**The complete application/source bundle is not cleared for redistribution.** libjbc's inherited-code permissions and excluded third-party artwork/branding remain unresolved; see [LICENSING_REVIEW.md](LICENSING_REVIEW.md) and the [asset inventory](LICENSING_ASSETS.json). This status does not limit the GPL grant for nueex's original work. No component, feature or UI appearance was changed by this migration.
+**The complete application/source bundle is not cleared for redistribution.** libjbc's inherited-code permissions and excluded third-party artwork/branding remain unresolved; see [LICENSING.md](LICENSING.md) and the [asset inventory](LICENSING_ASSETS.json). This status does not limit the GPL grant for nueex's original work. No component, feature or UI appearance was changed by this migration.
 
 Previously MIT-licensed versions and material retain their original permissions. The complete [historical MIT notice](LICENSES/MIT-legacy.txt), including existing copyright notices, is preserved. These GPL notices do not revoke prior MIT grants or grant new rights to third-party content. Historical releases and archives are unchanged.
 

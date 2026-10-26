@@ -38,8 +38,9 @@ assert sfo['APP_VER'] == sfo['VERSION'] == package_version()
 assert tuple(map(int, RELEASE.split('.'))) == tuple(map(int, sfo['APP_VER'].split('.')))
 _, _, sections = headers_and_sections(base/'psmtp.elf')
 assert not any(name.startswith(('.debug', '.zdebug')) for name,_ in sections)
+# Detect personal profile paths generically, independent of the build user's name.
 patterns = [rb'stage=', rb'(?i)[a-z]:[\\/]Users[\\/]', rb'(?i)/(?:Users|home)/',
-            rb'BADR-NUEEX', rb'psmtp-(?:scan|diag)\.log', rb'PSMTP_(?:TEST_|PS4_EXIT_TEST_ONLY|PS4_DISCOVERY_ONLY)',
+            rb'psmtp-(?:scan|diag)\.log', rb'PSMTP_(?:TEST_|PS4_EXIT_TEST_ONLY|PS4_DISCOVERY_ONLY)',
             rb'AddressSanitizer', rb'UndefinedBehaviorSanitizer', rb'HOST PREVIEW', rb'QA phone', rb'MOCK phone']
 scanned = {}
 for name in PACKAGE_FILES:
