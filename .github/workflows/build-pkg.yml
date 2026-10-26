@@ -1,0 +1,86 @@
+name: Build PKG
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-pkg-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and validate PS4 PKG
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_ROLL_FORWARD: Major
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up .NET for OpenOrbis packaging tools
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install LLVM 18.1.8
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'LLVM-18.1.8-win64.exe'
+          $llvm = Join-Path $env:RUNNER_TEMP 'llvm18'
+          Invoke-WebRequest 'https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe' -OutFile $installer
+          $process = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$llvm" -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "LLVM installation failed with exit code $($process.ExitCode)"
+          }
+          foreach ($tool in @('clang.exe', 'ld.lld.exe')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $llvm "bin/$tool"))) {
+              throw "LLVM installation is missing $tool"
+            }
+          }
+          "LLVM_BIN=$llvm/bin" >> $env:GITHUB_ENV
+
+      - name: Download and verify OpenOrbis SDK
+        run: python tools/bootstrap_openorbis.py
+
+      - name: Build production PKG
+        run: python tools/build_ps4.py --production --package --cc "$env:LLVM_BIN/clang.exe" --ld "$env:LLVM_BIN/ld.lld.exe" --output build-ps4
+
+      - name: Inspect package structure
+        run: python tools/inspect_ps4.py build-ps4
+
+      - name: Audit production package
+        run: python tools/verify_production_release.py build-ps4
+
+      - name: Upload validated PKG
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: PS-MTP-Explorer-PKG
+          path: build-ps4/*.pkg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build and validation reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: PS-MTP-Explorer-build-reports
+          path: build-ps4/*.json
+          if-no-files-found: ignore
+          retention-days: 30

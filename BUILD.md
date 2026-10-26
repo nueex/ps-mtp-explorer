@@ -2,9 +2,39 @@
 
 The repository includes the source, libjbc integration, fonts, and artwork
 for version **1.01**, with title ID `NUEX00001` and PS4 SFO version `01.01`.
-External compiler and SDK binaries are installed separately.
+You can build an installable PKG using the GitHub Actions workflow or build
+locally on your computer.
 
-## Requirements
+## Build with GitHub Actions (no local setup)
+
+The [Build PKG workflow](.github/workflows/build-pkg.yml) installs all required
+tools and builds the production package on GitHub. You do not need to install
+Python, LLVM, .NET, or the OpenOrbis SDK on your computer for this method.
+
+1. Fork this repository to your GitHub account, or use a repository where you
+   have permission to run workflows. Make sure the workflow file is committed
+   to the default branch.
+2. Open the repository's **Actions** tab. If workflows are disabled in your
+   fork, enable them.
+3. Select **Build PKG** in the workflow list.
+4. Click **Run workflow**, select the branch to build, and confirm
+   **Run workflow**.
+5. Open the new run and wait for **Build and validate PS4 PKG** to succeed.
+6. Under the run's **Artifacts** section, download **PS-MTP-Explorer-PKG**.
+7. Extract the downloaded ZIP to get
+   `IV0000-NUEX00001_00-NUEEXMTP00000000.pkg`, ready to install using GoldHEN.
+
+The workflow also runs automatically on pushes and pull requests. It uses
+Python 3.12, LLVM 18.1.8, .NET 9, and the hash-verified OpenOrbis v0.5.4 SDK
+on a Windows runner, then builds, inspects, and audits the production package.
+
+Build and validation reports are available as
+**PS-MTP-Explorer-build-reports**, including available reports after a failure.
+Artifacts are retained for 30 days.
+
+## Local build requirements
+
+For a local build, install the external compiler and SDK binaries separately:
 
 - **Python 3.12 or later**, available as `python` (or `python3` on Unix).
 - **OpenOrbis PS4 Toolchain v0.5.4**, including its headers, libraries,
