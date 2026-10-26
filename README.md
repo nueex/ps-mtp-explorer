@@ -146,7 +146,7 @@ Phone package installation requires free internal storage for both the package a
 <details>
 <summary><strong>Where are downloads and source code?</strong></summary>
 
-The compiled application is distributed through GitHub Releases. The application source and build scripts are included in this repository; follow [BUILD.md](BUILD.md) to compile your own copy. Required third-party notices and corresponding runtime materials also accompany the release separately.
+The application source and build scripts are included in this repository; follow [BUILD.md](BUILD.md) to compile your own copy. Previously released binaries retain their accompanying notices. See [LICENSING.md](LICENSING.md) for the current original-work GPL grant and unresolved requirements for distributing the complete application.
 </details>
 
 ## Feedback
@@ -161,11 +161,23 @@ If PS MTP Explorer makes managing your PS4 easier, you can support development o
 
 ## Credits & third-party notices
 
-Created by **nueex**. Built with [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), musl, stb and Noto Sans.
+**Original Author: nueex — Copyright (C) 2026 nueex** (original project work). Built with [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), musl, stb and Noto Sans.
 
 **libjbc - PS4 Jailbreak C library by sleirsgoevy, with modifications by bucanero. Provided and used with full author attribution for PS4 homebrew execution.**
 
+Additional libjbc contributor: **LightningMods**, for upstream Sony credential/capability handling.
+
 See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and the third-party materials attached to the release for component notices. PS MTP Explorer is an independent homebrew project and is not affiliated with Sony Interactive Entertainment.
+
+## License and scope
+
+**nueex's original work is licensed under GNU GPL v3.0-or-later (`GPL-3.0-or-later`)**, effective 2026-10-26. You may redistribute and/or modify the covered work under GNU GPL version 3 or, at your option, any later version. It is provided **WITHOUT ANY WARRANTY**, including MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the complete [LICENSE](LICENSE), [licensing scope](LICENSING.md), and explicit [file/contribution inventory](LICENSE_SCOPE.json).
+
+The grant covers original application code, project-specific UI/design, authored icons and artwork owned by nueex. Mixed files are covered only for nueex's original contributions. Third-party libraries, OpenOrbis-derived material, fonts, trademarks and externally owned artwork retain their existing terms. No whole-file GPL-3.0-or-later grant is asserted for libjbc or mixed assets.
+
+**The complete application/source bundle is not cleared for redistribution.** libjbc's inherited-code permissions and excluded third-party artwork/branding remain unresolved; see [LICENSING_REVIEW.md](LICENSING_REVIEW.md) and the [asset inventory](LICENSING_ASSETS.json). This status does not limit the GPL grant for nueex's original work. No component, feature or UI appearance was changed by this migration.
+
+Previously MIT-licensed versions and material retain their original permissions. The complete [historical MIT notice](LICENSES/MIT-legacy.txt), including existing copyright notices, is preserved. These GPL notices do not revoke prior MIT grants or grant new rights to third-party content. Historical releases and archives are unchanged.
 
 ---
 

@@ -1,3 +1,12 @@
+/*
+ * PS MTP Explorer
+ * Original Author: nueex
+ * Copyright (C) 2026 nueex
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * GNU GPL version 3 or later; see LICENSE and LICENSING.md.
+ * WITHOUT ANY WARRANTY; see LICENSE.
+ * Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
+ */
 /* PS4 x86-64 fstat wire ABI, independent of SDK musl mode_t.
  * ABI references and the SDK mismatch are recorded in docs/COPY_0.4.5.md.
  * These fixed-width declarations describe the native data interface. */

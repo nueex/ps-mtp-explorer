@@ -113,6 +113,12 @@ Test harnesses are not required by this target.
 
 ## Assets and notices
 
+**Original Author: nueex — Copyright (C) 2026 nueex.** Original project work is
+GPL-3.0-or-later under [LICENSING.md](LICENSING.md) and [LICENSE_SCOPE.json](LICENSE_SCOPE.json).
+Historical MIT grants and all third-party exclusions remain. Successful builds
+do not establish redistribution permission for inherited libjbc code or
+excluded artwork/branding; the complete application remains uncleared.
+
 Normal builds regenerate the embedded font from the bundled, hash-checked
 `assets/fonts/NotoSans-Light.ttf`. Artwork is already embedded in the
 committed `src/ps4/reference_assets.inc`; no asset-generation step is needed.

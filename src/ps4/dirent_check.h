@@ -1,3 +1,12 @@
+/*
+ * PS MTP Explorer
+ * Original Author: nueex
+ * Copyright (C) 2026 nueex
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * GNU GPL version 3 or later; see LICENSE and LICENSING.md.
+ * WITHOUT ANY WARRANTY; see LICENSE.
+ * Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
+ */
 #ifndef PSMTP_DIRENT_CHECK_H
 #define PSMTP_DIRENT_CHECK_H
 /* readdir owns traversal of its variable-length native buffer. BSD permits

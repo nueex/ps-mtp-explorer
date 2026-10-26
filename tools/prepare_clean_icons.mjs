@@ -1,3 +1,11 @@
+// PS MTP Explorer
+// Original Author: nueex
+// Copyright (C) 2026 nueex
+// SPDX-License-Identifier: GPL-3.0-or-later
+// GNU GPL version 3 or later; see LICENSE and LICENSING.md.
+// WITHOUT ANY WARRANTY; see LICENSE.
+// Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
+
 // Rasterize editable local SVGs with the bundled sharp dependency.
 // Call prepareCleanIcons({sharp: require('sharp')}) from node_repl.
 import { readFile, writeFile, mkdir, access } from 'node:fs/promises';

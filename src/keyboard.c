@@ -1,3 +1,12 @@
+/*
+ * PS MTP Explorer
+ * Original Author: nueex
+ * Copyright (C) 2026 nueex
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * GNU GPL version 3 or later; see LICENSE and LICENSING.md.
+ * WITHOUT ANY WARRANTY; see LICENSE.
+ * Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
+ */
 #include "psmtp/keyboard.h"
 static const unsigned starts[]={0,12,22,31,41},counts[]={12,10,9,10,3};
 static unsigned row(size_t key){unsigned r=0;while(r<4 && key>=starts[r+1])++r;return r;}

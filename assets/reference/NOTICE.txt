@@ -1,3 +1,16 @@
+Current original-work grant (2026-10-26): Original Author: nueex -
+Copyright (C) 2026 nueex. The maintainer confirms ownership of original project
+UI/design, authored geometric icons, launcher and title artwork; those original
+contributions are offered under GPL-3.0-or-later. See ../../LICENSING.md and
+../../LICENSE_SCOPE.json for exact file/contribution scope and the preserved
+historical MIT grant. Third-party fonts, PS4/Sony branding, Bloodborne artwork
+and unresolved demo scenery are excluded. Composite assets and screenshots
+are not licensed as wholly original works. Pixels and renderer data are unchanged.
+
+The following earlier provenance/review notes are retained as historical
+records. The ownership confirmation resolves the earlier uncertainty about
+nueex's original project artwork only; it grants no rights in external elements.
+
 Derived from user-supplied psmtpResource images. Rights to supplied artwork remain with its owners; no application MIT licensing of that artwork is asserted. Only isolated assets and thumbnail excerpts are extracted. Complete screenshots are not used as production UI backgrounds.
 
 As of 0.8.1, folder, document, device, Settings, Home, action and gamepad
@@ -5,3 +18,11 @@ pictograms are authored geometric SVGs in assets/icons/, covered by the
 application's MIT license. Supplied wordmarks, launcher artwork and QA-only
 thumbnail excerpts remain subject to the original notice above. The PS4
 wordmark is preserved within the platform asset; its gamepad is replaced.
+
+Licensing follow-up (2026-10-26): "QA-only" describes the intended demo use,
+not exclusion from distributed code. The three thumbnail arrays are present in
+src/ps4/reference_assets.inc and referenced by the renderer's asset table.
+Their rights, the supplied title/launcher and the PS4 wordmark remain unresolved.
+assets/explorer.png also depicts these materials. See ../../LICENSING_REVIEW.md
+and ../../LICENSING_ASSETS.json for the clearance/replacement map. No new
+license grant or public redistribution permission is asserted by this notice.

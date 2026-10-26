@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "effective_date": "2026-10-26",
+  "local_base_revision": "164e3fb007154b2ca817fd944f49205b255326ce",
+  "original_author": "nueex",
+  "copyright": "Copyright (C) 2026 nueex",
+  "license": "GPL-3.0-or-later",
+  "scope_document": "LICENSING.md",
+  "ownership_basis": "Express maintainer confirmation on 2026-10-26 of original project code, UI design, icons and project-specific artwork; third-party intellectual property excluded.",
+  "fully_original_files": [
+    ".gitattributes",
+    ".github/FUNDING.yml",
+    ".gitignore",
+    "BUILD.md",
+    "CMakeLists.txt",
+    "HARDWARE_SAFETY.md",
+    "LICENSE_SCOPE.json",
+    "LICENSING.md",
+    "LICENSING_ASSETS.json",
+    "LICENSING_REVIEW.md",
+    "LICENSING_VALIDATION.md",
+    "Makefile.ps4",
+    "README.md",
+    "THIRD_PARTY_LICENSES.md",
+    "assets/icon.png",
+    "assets/icons/copy.svg",
+    "assets/icons/delete.svg",
+    "assets/icons/document.svg",
+    "assets/icons/drive.svg",
+    "assets/icons/folder.svg",
+    "assets/icons/gamepad.svg",
+    "assets/icons/home.svg",
+    "assets/icons/info.svg",
+    "assets/icons/move.svg",
+    "assets/icons/phone.svg",
+    "assets/icons/rename.svg",
+    "assets/icons/settings.svg",
+    "assets/icons/usb.svg",
+    "assets/reference/NOTICE.txt",
+    "assets/reference/copy.png",
+    "assets/reference/delete.png",
+    "assets/reference/document.png",
+    "assets/reference/drive.png",
+    "assets/reference/folder.png",
+    "assets/reference/home.png",
+    "assets/reference/icon0.png",
+    "assets/reference/info.png",
+    "assets/reference/move.png",
+    "assets/reference/phone.png",
+    "assets/reference/provenance.json",
+    "assets/reference/rename.png",
+    "assets/reference/settings.png",
+    "assets/reference/usb.png",
+    "assets/reference/wordmark.png",
+    "include/psmtp/browser.h",
+    "include/psmtp/copy.h",
+    "include/psmtp/copy_paths.h",
+    "include/psmtp/copy_plan.h",
+    "include/psmtp/device_sound.h",
+    "include/psmtp/device_watch.h",
+    "include/psmtp/diag_log.h",
+    "include/psmtp/diagnostic.h",
+    "include/psmtp/keyboard.h",
+    "include/psmtp/locations.h",
+    "include/psmtp/log_paths.h",
+    "include/psmtp/metadata.h",
+    "include/psmtp/mtp.h",
+    "include/psmtp/name.h",
+    "include/psmtp/navigator.h",
+    "include/psmtp/pkg.h",
+    "include/psmtp/sha256.h",
+    "include/psmtp/transfer_meter.h",
+    "include/psmtp/ui_format.h",
+    "include/psmtp/usb_label.h",
+    "include/psmtp/usb_module.h",
+    "include/psmtp/usb_select.h",
+    "include/psmtp/version.h",
+    "src/browser.c",
+    "src/copy.c",
+    "src/copy_plan.c",
+    "src/device_sound.c",
+    "src/device_watch.c",
+    "src/diag_log.c",
+    "src/diagnostic.c",
+    "src/keyboard.c",
+    "src/locations.c",
+    "src/metadata.c",
+    "src/mtp.c",
+    "src/name.c",
+    "src/navigator.c",
+    "src/pkg.c",
+    "src/ps4/console_render.c",
+    "src/ps4/console_render.h",
+    "src/ps4/copy_file.c",
+    "src/ps4/copy_file.h",
+    "src/ps4/device_audio.c",
+    "src/ps4/device_audio.h",
+    "src/ps4/dirent_check.h",
+    "src/ps4/exit.c",
+    "src/ps4/exit.h",
+    "src/ps4/file_ops.c",
+    "src/ps4/file_ops.h",
+    "src/ps4/file_store.c",
+    "src/ps4/file_store.h",
+    "src/ps4/main.c",
+    "src/ps4/package_install.c",
+    "src/ps4/package_install.h",
+    "src/ps4/preview.c",
+    "src/ps4/preview.h",
+    "src/ps4/process_access.c",
+    "src/ps4/process_access.h",
+    "src/ps4/release_config.h",
+    "src/ps4/screen.c",
+    "src/ps4/screen.h",
+    "src/ps4/stat_abi.h",
+    "src/ps4/storage_space.c",
+    "src/ps4/storage_space.h",
+    "src/ps4/ui_draw.c",
+    "src/ps4/ui_draw.h",
+    "src/ps4/ui_font.c",
+    "src/ps4/ui_font.h",
+    "src/ps4/usb_ps4.c",
+    "src/sha256.c",
+    "src/transfer_meter.c",
+    "src/ui_format.c",
+    "src/usb_label.c",
+    "src/usb_module.c",
+    "src/usb_select.c",
+    "tools/bootstrap_openorbis.py",
+    "tools/build_ps4.py",
+    "tools/embed_font.py",
+    "tools/inspect_ps4.py",
+    "tools/package_identity.py",
+    "tools/prepare_clean_icons.mjs",
+    "tools/ps4_runtime.py",
+    "tools/verify_production_release.py"
+  ],
+  "mixed_files": [
+    {
+      "path": "assets/explorer.png",
+      "covered": "Only original nueex UI/design, authored geometric graphics, project title/launcher and generated representation of those owned portions; GPL-3.0-or-later.",
+      "excluded": "PS4/Sony branding, Bloodborne artwork, unresolved demo scenery and other third-party expression. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "assets/icons/platform.svg",
+      "covered": "Only original nueex UI/design, authored geometric graphics, project title/launcher and generated representation of those owned portions; GPL-3.0-or-later.",
+      "excluded": "PS4/Sony branding, Bloodborne artwork, unresolved demo scenery and other third-party expression. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "assets/reference/platform.png",
+      "covered": "Only original nueex UI/design, authored geometric graphics, project title/launcher and generated representation of those owned portions; GPL-3.0-or-later.",
+      "excluded": "PS4/Sony branding, Bloodborne artwork, unresolved demo scenery and other third-party expression. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "distribution/LICENSES.txt",
+      "covered": "Original current-scope notice prose by nueex only.",
+      "excluded": "Retained historical MIT text, third-party credits/terms and GPL/OFL/legal texts; no relicensing of those materials."
+    },
+    {
+      "path": "src/ps4/link.x",
+      "covered": "Only independently copyrightable original nueex changes, to the extent owned, offered under GPL-3.0-or-later.",
+      "excluded": "Inherited OpenOrbis linker script remains GPL-3.0-only; existing whole-file marker/notice unchanged."
+    },
+    {
+      "path": "src/ps4/reference_assets.inc",
+      "covered": "Only original nueex UI/design, authored geometric graphics, project title/launcher and generated representation of those owned portions; GPL-3.0-or-later.",
+      "excluded": "PS4/Sony branding, Bloodborne artwork, unresolved demo scenery and other third-party expression. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "third_party/libjbc/defs.h",
+      "covered": "Only independently copyrightable original additions/changes owned by nueex relative to pinned upstream inputs; GPL-3.0-or-later.",
+      "excluded": "All inherited libjbc expression; no upstream license or redistribution permission is supplied.",
+      "upstream_revision": "835fe016ff0ae5dd89b9249f39cc0fe093fd07dd",
+      "provenance": "third_party/libjbc/provenance.json",
+      "changes_notice": "third_party/libjbc/NOTICE.txt"
+    },
+    {
+      "path": "third_party/libjbc/jailbreak.c",
+      "covered": "Only independently copyrightable original additions/changes owned by nueex relative to pinned upstream inputs; GPL-3.0-or-later.",
+      "excluded": "All inherited libjbc expression; no upstream license or redistribution permission is supplied.",
+      "upstream_revision": "835fe016ff0ae5dd89b9249f39cc0fe093fd07dd",
+      "provenance": "third_party/libjbc/provenance.json",
+      "changes_notice": "third_party/libjbc/NOTICE.txt"
+    },
+    {
+      "path": "third_party/libjbc/kernelrw.c",
+      "covered": "Only independently copyrightable original additions/changes owned by nueex relative to pinned upstream inputs; GPL-3.0-or-later.",
+      "excluded": "All inherited libjbc expression; no upstream license or redistribution permission is supplied.",
+      "upstream_revision": "835fe016ff0ae5dd89b9249f39cc0fe093fd07dd",
+      "provenance": "third_party/libjbc/provenance.json",
+      "changes_notice": "third_party/libjbc/NOTICE.txt"
+    },
+    {
+      "path": "third_party/libjbc/kernelrw.h",
+      "covered": "Only independently copyrightable original additions/changes owned by nueex relative to pinned upstream inputs; GPL-3.0-or-later.",
+      "excluded": "All inherited libjbc expression; no upstream license or redistribution permission is supplied.",
+      "upstream_revision": "835fe016ff0ae5dd89b9249f39cc0fe093fd07dd",
+      "provenance": "third_party/libjbc/provenance.json",
+      "changes_notice": "third_party/libjbc/NOTICE.txt"
+    },
+    {
+      "path": "third_party/libjbc/libjbc.h",
+      "covered": "Only independently copyrightable original additions/changes owned by nueex relative to pinned upstream inputs; GPL-3.0-or-later.",
+      "excluded": "All inherited libjbc expression; no upstream license or redistribution permission is supplied.",
+      "upstream_revision": "835fe016ff0ae5dd89b9249f39cc0fe093fd07dd",
+      "provenance": "third_party/libjbc/provenance.json",
+      "changes_notice": "third_party/libjbc/NOTICE.txt"
+    }
+  ],
+  "excluded_files": [
+    {
+      "path": "LICENSE",
+      "terms": "Unmodified GNU GPLv3 license document; FSF copyright, not nueex artwork/code."
+    },
+    {
+      "path": "LICENSES/MIT-legacy.txt",
+      "terms": "Verbatim pre-migration MIT grant and copyright notices; preserved historical permissions."
+    },
+    {
+      "path": "assets/fonts/NotoSans-Light-OFL.txt",
+      "terms": "Noto/SIL OFL-1.1 font material or its provenance/license text; no nueex relicensing."
+    },
+    {
+      "path": "assets/fonts/NotoSans-Light.provenance.json",
+      "terms": "Noto/SIL OFL-1.1 font material or its provenance/license text; no nueex relicensing."
+    },
+    {
+      "path": "assets/fonts/NotoSans-Light.ttf",
+      "terms": "Noto/SIL OFL-1.1 font material or its provenance/license text; no nueex relicensing."
+    },
+    {
+      "path": "assets/fonts/OFL.txt",
+      "terms": "Noto/SIL OFL-1.1 font material or its provenance/license text; no nueex relicensing."
+    },
+    {
+      "path": "assets/icons/ps4-wordmark.png",
+      "terms": "Externally owned or unresolved artwork; no project GPL/MIT grant. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "assets/reference/thumb_image.png",
+      "terms": "Externally owned or unresolved artwork; no project GPL/MIT grant. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "assets/reference/thumb_pkg.png",
+      "terms": "Externally owned or unresolved artwork; no project GPL/MIT grant. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "assets/reference/thumb_video.png",
+      "terms": "Externally owned or unresolved artwork; no project GPL/MIT grant. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "src/ps4/font_data.inc",
+      "terms": "Noto/SIL OFL-1.1 font material or its provenance/license text; no nueex relicensing."
+    },
+    {
+      "path": "third_party/libjbc/NOTICE.txt",
+      "terms": "Upstream libjbc or its preserved attribution/provenance; redistribution unresolved. Original notice prose does not license the upstream code."
+    },
+    {
+      "path": "third_party/libjbc/README.md",
+      "terms": "Upstream libjbc or its preserved attribution/provenance; redistribution unresolved. Original notice prose does not license the upstream code."
+    },
+    {
+      "path": "third_party/libjbc/jailbreak.h",
+      "terms": "Upstream libjbc or its preserved attribution/provenance; redistribution unresolved. Original notice prose does not license the upstream code."
+    },
+    {
+      "path": "third_party/libjbc/provenance.json",
+      "terms": "Upstream libjbc or its preserved attribution/provenance; redistribution unresolved. Original notice prose does not license the upstream code."
+    }
+  ],
+  "interpretation": [
+    "The grant covers only rights held by nueex. For original prose/metadata it does not relicense quoted notices, legal text or referenced third-party works.",
+    "No whole-file GPL-3.0-or-later label applies to mixed files. Upstream grants and notices remain unchanged.",
+    "Unlisted/ignored local files, research clones, SDKs and historical artifacts are outside this inventory.",
+    "Historical MIT grants remain effective for previously MIT-licensed material. This does not license new contributions under MIT.",
+    "Original project-title/launcher art is covered on the maintainer ownership confirmation; third-party typography, fonts and marks are not relicensed."
+  ],
+  "complete_application_distribution_cleared": false,
+  "remaining_issues": [
+    "libjbc upstream redistribution permissions",
+    "Third-party marks and Bloodborne/demo scenery clearance",
+    "Exact corresponding-source/runtime compliance for a future complete release"
+  ],
+  "initial_local_review_revision": "4b051d6fae77a3fedb6cc85ed2828ed4fb36d167",
+  "publication_integration": "Based on current main 164e3fb; upstream removal of obsolete tools and unused font retained. No new binaries or release artifacts."
+}

@@ -1,3 +1,11 @@
+# PS MTP Explorer
+# Original Author: nueex
+# Copyright (C) 2026 nueex
+# SPDX-License-Identifier: GPL-3.0-or-later
+# GNU GPL version 3 or later; see LICENSE and LICENSING.md.
+# WITHOUT ANY WARRANTY; see LICENSE.
+# Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
+
 cmake_minimum_required(VERSION 3.16)
 project(ps_mtp_explorer VERSION 1.01 LANGUAGES C)
 set(CMAKE_C_STANDARD 99)

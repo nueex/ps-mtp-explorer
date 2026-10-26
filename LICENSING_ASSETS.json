@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-10-26",
+  "scope": "Original project artwork covered by the scoped nueex GPL grant, excluded third-party elements, and dependent mixed copies. See LICENSING.md and LICENSE_SCOPE.json.",
+  "original_author_credit": "Original Author: nueex - Copyright (C) 2026 nueex (original contributions only)",
+  "status_meaning": "Current status distinguishes original owned portions from third-party IP. Ownership confirmation is not a grant from external rights holders. No pixels were changed.",
+  "groups": [
+    {
+      "id": "launcher",
+      "status": "original-project-work-GPL-3.0-or-later",
+      "permission_evidence": "Maintainer ownership confirmation and scoped grant dated 2026-10-26, recorded in LICENSING.md.",
+      "source_record": "app icon.jpg",
+      "use": "PS4 package icon and README",
+      "required_action": "No replacement needed for original project artwork. Preserve editable originals/provenance and any separate font/third-party notices. No rights to external IP are granted.",
+      "files": [
+        {
+          "path": "assets/reference/icon0.png",
+          "sha256": "64148659f9a5f245940f022acfe57734de96e16b59bc2c66a594355ae12864f1",
+          "dimensions": [
+            512,
+            512
+          ]
+        },
+        {
+          "path": "assets/icon.png",
+          "sha256": "64148659f9a5f245940f022acfe57734de96e16b59bc2c66a594355ae12864f1",
+          "dimensions": [
+            512,
+            512
+          ]
+        }
+      ],
+      "original_work_license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "application-title",
+      "status": "original-project-work-GPL-3.0-or-later",
+      "permission_evidence": "Maintainer ownership confirmation and scoped grant dated 2026-10-26, recorded in LICENSING.md.",
+      "source_record": "1792455114194.jpg; crop recorded in assets/reference/provenance.json",
+      "use": "Production header; embedded ui_wordmark; README screenshot",
+      "required_action": "No replacement needed for original project artwork. Preserve editable originals/provenance and any separate font/third-party notices. No rights to external IP are granted.",
+      "files": [
+        {
+          "path": "assets/reference/wordmark.png",
+          "sha256": "caef162d0d94c80daf663746955a30261192f6cbce87cbc2adedb355ed66fd92",
+          "dimensions": [
+            570,
+            48
+          ]
+        }
+      ],
+      "original_work_license": "GPL-3.0-or-later"
+    },
+    {
+      "id": "platform-brand",
+      "status": "mixed-original-work-and-excluded-branding",
+      "permission_evidence": "Original authored portion confirmed by nueex; no external PS4 branding grant established.",
+      "source_record": "Supplied PS4 wordmark; SVG mixes that raster with authored gamepad.svg",
+      "use": "Production header; embedded ui_platform; README screenshot",
+      "required_action": "Document applicable branding/artwork rights, or use a plain-text platform label and authored gamepad.",
+      "files": [
+        {
+          "path": "assets/icons/ps4-wordmark.png",
+          "sha256": "89a8583a3058d9c236f291add96924dfa9b484313d4c3c65d422720f05665729",
+          "dimensions": [
+            112,
+            39
+          ]
+        },
+        {
+          "path": "assets/icons/platform.svg",
+          "sha256": "f3d1e528885b49a511c2f0bda77595186ac406988efa360a7fba0f9176e08d11"
+        },
+        {
+          "path": "assets/reference/platform.png",
+          "sha256": "32f960b8b317254d65cd02e63b55a62645ae05f1589baedd3b93e13571a69793",
+          "dimensions": [
+            176,
+            39
+          ]
+        }
+      ],
+      "original_work_license": "GPL-3.0-or-later for authored gamepad/design only"
+    },
+    {
+      "id": "package-demo",
+      "status": "permission-or-replacement-needed",
+      "permission_evidence": null,
+      "source_record": "1792455114194.jpg; Bloodborne cover excerpt",
+      "use": "Embedded ui_thumb_pkg; demo rendering; README screenshot",
+      "required_action": "Obtain relevant artwork permission or replace with an original generic package illustration.",
+      "files": [
+        {
+          "path": "assets/reference/thumb_pkg.png",
+          "sha256": "e350d2e16463112ebc7de154e881ad67e039ef97c41a0d36984499fde5126c63",
+          "dimensions": [
+            178,
+            132
+          ]
+        }
+      ]
+    },
+    {
+      "id": "image-demo",
+      "status": "permission-or-replacement-needed",
+      "permission_evidence": null,
+      "source_record": "1792455114194.jpg; unidentified scenery crop",
+      "use": "Embedded ui_thumb_image; demo rendering; README screenshot",
+      "required_action": "Identify creator/license or replace with original/licensed demo scenery.",
+      "files": [
+        {
+          "path": "assets/reference/thumb_image.png",
+          "sha256": "f6aad5cf7e477d8399092d1cbde9bb73a37619d13bd73ae1a8c50118f0769921",
+          "dimensions": [
+            218,
+            132
+          ]
+        }
+      ]
+    },
+    {
+      "id": "video-demo",
+      "status": "permission-or-replacement-needed",
+      "permission_evidence": null,
+      "source_record": "1792455114194.jpg; unidentified scenery crop with play glyph",
+      "use": "Embedded ui_thumb_video; demo rendering; README screenshot",
+      "required_action": "Identify creator/license or replace with original/licensed demo scenery and authored play glyph.",
+      "files": [
+        {
+          "path": "assets/reference/thumb_video.png",
+          "sha256": "749f5e6a4b211c4cead7aee8e082ff7749fa6492c85f839ba95d290c83ac1f07",
+          "dimensions": [
+            218,
+            132
+          ]
+        }
+      ]
+    },
+    {
+      "id": "documentation-screenshot",
+      "status": "mixed-original-UI-and-excluded-imagery",
+      "permission_evidence": "Original UI/design confirmed by nueex; depicted third-party marks/demo content remain excluded.",
+      "source_record": "App renderer with demo content and supplied title/platform marks",
+      "use": "README; not a packaged UI background",
+      "required_action": "Re-render after clearing/replacing the source assets, or document permission adequate for this use.",
+      "files": [
+        {
+          "path": "assets/explorer.png",
+          "sha256": "3993411f16283c421fb40eba70e5bdad518c885a80995e55363c6ab214309bf7",
+          "dimensions": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "original_work_license": "GPL-3.0-or-later for original UI/design only"
+    }
+  ],
+  "generated_dependency": {
+    "path": "src/ps4/reference_assets.inc",
+    "sha256": "8c598c7f1b351ce7b37bc57751b2f808a396f96c07033d891edbf1781c30b328",
+    "required_action": "Original owned graphic portions are GPL-3.0-or-later. Third-party branding/demo arrays remain excluded. Regenerate only after changing/clearing inputs; no whole-file GPL header.",
+    "verified_embedded_assets": [
+      {
+        "symbol": "ui_wordmark",
+        "source_png": "assets/reference/wordmark.png",
+        "exact_rgba_match": true,
+        "rgba_sha256": "b90dc0c25f7d9cb6c845f83ed34a3d7a33e84298b92fa2177c51ed50b6ef2c17"
+      },
+      {
+        "symbol": "ui_platform",
+        "source_png": "assets/reference/platform.png",
+        "exact_rgba_match": true,
+        "rgba_sha256": "30f9729c8db24ae0880c953b81a5b21dd405d2d5e04d3971c718c41216a6fe79"
+      },
+      {
+        "symbol": "ui_thumb_pkg",
+        "source_png": "assets/reference/thumb_pkg.png",
+        "exact_rgba_match": true,
+        "rgba_sha256": "7c2e05e2771d30bba90fd827abee969bbd1379ef09969b07edcf567a8fc984f2"
+      },
+      {
+        "symbol": "ui_thumb_image",
+        "source_png": "assets/reference/thumb_image.png",
+        "exact_rgba_match": true,
+        "rgba_sha256": "494ee4573f9a0bc7f12a5e9f33e0a6208bf505828810d251cdd15adc3c10ff9b"
+      },
+      {
+        "symbol": "ui_thumb_video",
+        "source_png": "assets/reference/thumb_video.png",
+        "exact_rgba_match": true,
+        "rgba_sha256": "4205edc16862e8d10958c929bba24ec31a901ab62c280219defe50e2f26a3fee"
+      }
+    ]
+  },
+  "composite_platform_check": {
+    "embedded_raster_matches": "assets/icons/ps4-wordmark.png",
+    "exact_bytes_match": true
+  },
+  "already_documented_separate_terms": {
+    "authored_geometric_icons": "Now GPL-3.0-or-later under LICENSE_SCOPE.json; historical MIT grants retained in LICENSES/MIT-legacy.txt. platform.svg remains a mixed exception.",
+    "noto_fonts": "OFL-1.1; preserve both supplied notices.",
+    "runtime_user_previews": "User-selected artwork/thumbnail decoding is a feature, separate from distributing fixed demo images."
+  },
+  "ownership_confirmation": {
+    "date": "2026-10-26",
+    "basis": "nueex expressly confirms creation/ownership of original project code, UI designs, icons and project-specific artwork; excludes external libraries and third-party IP.",
+    "scope_document": "LICENSING.md"
+  }
+}

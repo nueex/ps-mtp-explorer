@@ -1,4 +1,6 @@
 libjbc by sleirsgoevy, OpenOrbis integration by bucanero.
+Additional upstream contributor: LightningMods (Sony credentials/capabilities;
+merged upstream PR #1: https://github.com/sleirsgoevy/ps4-libjbc/pull/1).
 Pinned origin: https://github.com/bucanero/ps4-libjbc
 Commit: 835fe016ff0ae5dd89b9249f39cc0fe093fd07dd
 Unmodified input file hashes are in provenance.json.
@@ -7,6 +9,14 @@ The upstream tree does not provide an explicit license file. This third-party
 code is not covered by the PSMTP MIT license. Attribution and corresponding
 sources are included for this local, personal homebrew preview. No public
 redistribution or upstream licensing permission is asserted by this project.
+See ../../LICENSING_REVIEW.md for the contributor/permission investigation.
+
+Scoped original-work grant (2026-10-26): Original Author: nueex -
+Copyright (C) 2026 nueex, for nueex's independently copyrightable local
+additions/changes only, offered under GPL-3.0-or-later. See ../../LICENSING.md
+and ../../LICENSE_SCOPE.json. This is not a license for inherited libjbc code;
+all upstream rights and the unresolved redistribution issue remain unchanged.
+No whole-file GPL identifier is applied to this library by the project.
 
 PSMTP integration changes:
 - Only jailbreak.c and kernelrw.c are compiled; mounting utilities are unused.

@@ -1,3 +1,27 @@
+PS MTP Explorer - current original-work licensing notice (2026-10-26)
+Original Author: nueex - Copyright (C) 2026 nueex
+
+Original work owned by nueex is licensed under GNU GPL version 3 or, at your
+option, any later version (GPL-3.0-or-later). It comes WITHOUT ANY WARRANTY,
+including MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. The complete
+GPLv3 text is retained below with the component legal texts.
+
+This grant covers only nueex's original code, project-specific UI/design and
+owned artwork, as identified by LICENSE_SCOPE.json and LICENSING.md in the
+matching source/companion materials. It does not relicense libjbc, OpenOrbis,
+musl/stb, Noto fonts, third-party trademarks or externally owned artwork.
+The full application/source bundle is NOT cleared for redistribution: libjbc
+permission and third-party artwork/branding questions remain unresolved.
+This status does not limit the GPL grant for nueex's original work.
+
+Historical MIT grants and copyright notices remain effective for previously
+MIT-licensed material; the old license is preserved in LICENSES/MIT-legacy.txt.
+The following earlier release/component notices are retained verbatim. Their
+versioned download/source references describe those earlier releases and do
+not replace matching corresponding source and notices for a new release.
+
+----- Retained historical and third-party legal notices -----
+
 PS MTP Explorer 1.00 - licenses and notices
 
 Required third-party runtime source materials:
