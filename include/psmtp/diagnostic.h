@@ -13,26 +13,28 @@
 #include <stdio.h>
 #define MTP_DIAG_STORAGES 4u
 #define MTP_DIAG_OBJECTS 32u
-
+/* One bounded, automatic metadata diagnostic; closes its own session. */
 int mtp_diagnose_roots(mtp_client *, FILE *, int names);
 
 typedef struct {
     uint16_t vendor_id,product_id;
     uint8_t mtp;
     uint64_t connection;
-    char name[96];
+    char name[96]; /* USB product label only; never a serial number. */
 } psmtp_ps4_candidate;
 
 typedef struct {
     int communicate, names;
     void *user;
     void (*devices)(void *,const psmtp_ps4_candidate *,size_t);
-
+    /* Choose only from measured candidates; -1 cancels before any MTP traffic. */
     int (*choose_device)(void *, const psmtp_ps4_candidate *, size_t);
-
+    /* Owns the protocol session while the selected USB handle stays alive. */
     int (*browse)(void *,mtp_client *,FILE *);
 } psmtp_ps4_options;
 int psmtp_ps4_diagnose(const psmtp_ps4_options *, FILE *);
 int psmtp_ps4_poll_devices(psmtp_ps4_candidate *,size_t *,int,FILE *);
+void psmtp_ps4_usb_stop(void);
 void psmtp_ps4_usb_shutdown(FILE *);
+int psmtp_ps4_usb_shutdown_report(FILE *);
 #endif

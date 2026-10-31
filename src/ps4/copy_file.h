@@ -11,6 +11,7 @@
 #define PSMTP_COPY_FILE_H
 #include "psmtp/copy.h"
 #include "psmtp/copy_paths.h"
+#include "work_io.h"
 typedef struct {
     int data,base,root,parent,directory,file,owned,owned_directory,published,directory_readable;
     uint64_t data_dev,data_ino,base_dev,base_ino,root_dev,root_ino,dir_dev,dir_ino,file_dev,file_ino;
@@ -19,6 +20,7 @@ typedef struct {
     char parent_path[256],directory_name[80],directory_path[256],temporary[256],path[256];
     char error_stage[40]; int error_number;
     FILE *log;
+    psmtp_work_io_scope pause_scope;
 } psmtp_copy_file;
 
 int psmtp_copy_file_discard(psmtp_copy_file *);

@@ -33,17 +33,27 @@ typedef struct {
     int drawer_focus;
     const char *clipboard_label,*destination;
     int operation,action,can_select,can_paste;
+    int speed_boost,preferences_unsaved,install_mode,settings_context,settings_index;uint64_t animation_ms;
     int list_view,drawer_settings,menu_kind,size_unknown,transfer_active;
     const mtp_navigator *browser;
     const char *modified,*clock_text,*display_version,*path;
     const psmtp_ui_item *display_items;size_t display_count,display_selected;
     const psmtp_ui_item *detail_override;uint64_t elapsed_ms;
+    /* Nonzero only during one serialized job. A new job gets a new epoch. */
+    uint64_t busy_epoch;
+    uint64_t metadata_revision;int metadata_revision_known;
     psmtp_transfer_meter transfer;
     const psmtp_metadata *(*metadata)(void *,size_t);void *metadata_user;
     const char *notice_title,*notice_text;
     int toolbar_focus,sort_mode,rename_allowed,can_create,install_percent,install_known,install_preparing;const char *edit_name,*edit_error;int keyboard_shift;
 } psmtp_console_selection;
 enum { PSMTP_MENU_OPEN,PSMTP_MENU_NEW_FOLDER,PSMTP_MENU_COPY,PSMTP_MENU_MOVE,PSMTP_MENU_PASTE,PSMTP_MENU_RENAME,PSMTP_MENU_DELETE,PSMTP_MENU_PROPERTIES,PSMTP_MENU_EXIT,PSMTP_MENU_COUNT };
-enum { PSMTP_VIEW_HOME,PSMTP_VIEW_PHONE,PSMTP_VIEW_LOCAL,PSMTP_VIEW_TRANSFERS,PSMTP_VIEW_LOGS,PSMTP_VIEW_PICK,PSMTP_VIEW_INFO,PSMTP_VIEW_MENU,PSMTP_VIEW_LOADING,PSMTP_VIEW_OPERATION,PSMTP_VIEW_SETTINGS,PSMTP_VIEW_CONTROLS,PSMTP_VIEW_RENAME,PSMTP_VIEW_SORT,PSMTP_VIEW_NOTICE,PSMTP_VIEW_INSTALL_CONFIRM,PSMTP_VIEW_INSTALL_PROGRESS };
+enum { PSMTP_VIEW_HOME,PSMTP_VIEW_PHONE,PSMTP_VIEW_LOCAL,PSMTP_VIEW_TRANSFERS,PSMTP_VIEW_LOGS,PSMTP_VIEW_PICK,PSMTP_VIEW_INFO,PSMTP_VIEW_MENU,PSMTP_VIEW_LOADING,PSMTP_VIEW_OPERATION,PSMTP_VIEW_SETTINGS,PSMTP_VIEW_CONTROLS,PSMTP_VIEW_RENAME,PSMTP_VIEW_SORT,PSMTP_VIEW_NOTICE,PSMTP_VIEW_INSTALL_CONFIRM,PSMTP_VIEW_INSTALL_PROGRESS,PSMTP_VIEW_INSTALL_MODE,PSMTP_VIEW_UPDATE };
 void psmtp_console_render(uint32_t *, const diag_log *, size_t, const char *, int, const char *, const psmtp_console_selection *,const mtp_navigator *);
+int psmtp_console_render_cached(void);
+void psmtp_console_render_invalidate(void);
+void psmtp_console_render_close(void);
+/* Per display buffer, initialize generation to zero. Copy only changed regions
+ * after that buffer has received the current complete static scene. */
+size_t psmtp_console_render_upload(uint32_t *,const uint32_t *,uint64_t *);
 #endif

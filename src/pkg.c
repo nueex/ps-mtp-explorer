@@ -9,6 +9,7 @@
  */
 #include "psmtp/pkg.h"
 #include "psmtp/sha256.h"
+#include "psmtp/version.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -16,6 +17,14 @@
 #include <ctype.h>
 static uint32_t pkg32(const uint8_t *p){return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3];}
 static uint64_t pkg64(const uint8_t *p){return (uint64_t)pkg32(p)<<32|pkg32(p+4);}
+typedef char pkg_title_id_length[(sizeof(PSMTP_TITLE_ID)==10)?1:-1];
+int psmtp_pkg_install_title_allowed(const char *title_id){
+    unsigned i;if(!title_id)return 0;
+    for(i=0;i<9;++i){unsigned char c=(unsigned char)title_id[i];
+        if(i<4){if(c<'A' || c>'Z')return 0;}else if(c<'0' || c>'9')return 0;
+    }
+    return !title_id[9] && memcmp(title_id,PSMTP_TITLE_ID,9)!=0;
+}
 int psmtp_pkg_name(const char *name){size_t n=name?strlen(name):0;return n>=4 && name[n-4]=='.' && tolower((unsigned char)name[n-3])=='p' && tolower((unsigned char)name[n-2])=='k' && tolower((unsigned char)name[n-1])=='g';}
 int psmtp_pkg_inspect(const psmtp_pkg_source *s,psmtp_pkg_info *p){
     uint8_t h[0x440];unsigned i;uint64_t table,count;psmtp_sha256 hash;int rc;

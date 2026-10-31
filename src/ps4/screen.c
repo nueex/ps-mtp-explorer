@@ -8,10 +8,15 @@
  * Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
  */
 #include "screen.h"
+#include "controller.h"
+#ifdef PSMTP_TEST_SCREEN
+#include "ps4_screen_test_api.h"
+#else
 #include <orbis/libkernel.h>
 #include <orbis/VideoOut.h>
 #include <orbis/Pad.h>
 #include <orbis/UserService.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
@@ -19,20 +24,23 @@
 #include "ui_font.h"
 #include "ui_draw.h"
 #include <time.h>
+#include "monotonic.h"
 
 #define WIDTH PSMTP_SCREEN_WIDTH
 #define HEIGHT PSMTP_SCREEN_HEIGHT
 #define FRAME_BYTES (WIDTH*HEIGHT*4u)
 #define DISPLAY_BYTES ((FRAME_BYTES*2u+0x1fffffu)&~0x1fffffu)
+#include "psmtp/cleanup_log.h"
+
 static struct {
-    int video,pad,registered,mapped,allocated,frame;
+    int video,registered,mapped,allocated,frame;
     off_t offset; void *memory; void *buffers[2]; int64_t flip;
-    uint32_t buttons; uint64_t repeat_at; int pad_error,pad_connected; int32_t display_error;
-    uint32_t *cpu;FILE *log;uint64_t timing_started,render_us;unsigned frames;
-} screen={.video=-1,.pad=-1};
+    int32_t display_error;
+    uint32_t *cpu;FILE *log;uint64_t timing_started,render_us,upload_generation[2],uploaded_bytes;unsigned frames,cached_frames,full_uploads;
+} screen={.video=-1};
 int psmtp_screen_open(FILE *log) {
-    int32_t rc,user=-1; OrbisVideoOutBufferAttribute attr;
-    OrbisUserServiceInitializeParams params={ORBIS_KERNEL_PRIO_FIFO_LOWEST};
+    int32_t rc; OrbisVideoOutBufferAttribute attr;
+    if(screen.video>=0 || screen.mapped || screen.allocated)return -1;
     screen.video=sceVideoOutOpen(ORBIS_VIDEO_USER_MAIN,ORBIS_VIDEO_OUT_BUS_MAIN,0,NULL);
     fprintf(log,"stage=video-open rc=%d\n",screen.video); if(screen.video<0) return -1;
     rc=sceKernelAllocateDirectMemory(0,sceKernelGetDirectMemorySize(),DISPLAY_BYTES,0x200000,3,&screen.offset);
@@ -46,33 +54,39 @@ int psmtp_screen_open(FILE *log) {
     rc=sceVideoOutRegisterBuffers(screen.video,0,screen.buffers,2,&attr);
     fprintf(log,"stage=video-register rc=0x%08" PRIx32 "\n",(uint32_t)rc); if(rc) return -1;
     screen.registered=1;
-    screen.cpu=malloc(FRAME_BYTES);if(!screen.cpu)return -1;screen.log=log;
+    screen.cpu=malloc(FRAME_BYTES);if(!screen.cpu)return -1;screen.log=log;screen.upload_generation[0]=screen.upload_generation[1]=0;
     rc=sceVideoOutSetFlipRate(screen.video,0);
     fprintf(log,"stage=video-flip-rate rc=0x%08" PRIx32 "\n",(uint32_t)rc); if(rc) return -1;
-    rc=scePadInit(); fprintf(log,"stage=pad-init rc=0x%08" PRIx32 "\n",(uint32_t)rc);
-    if(rc) return 0;
-    rc=sceUserServiceInitialize(&params); fprintf(log,"stage=user-init rc=0x%08" PRIx32 "\n",(uint32_t)rc);
-    rc=sceUserServiceGetInitialUser(&user); fprintf(log,"stage=initial-user rc=0x%08" PRIx32 "\n",(uint32_t)rc);
-    if(rc) return 0;
-    screen.pad=scePadOpen(user,0,0,NULL); fprintf(log,"stage=pad-open rc=%d\n",screen.pad);
+    psmtp_controller_open(log);
     return 0;
 }
 void psmtp_screen_draw(const diag_log *log,size_t scroll,const char *status,int names,const char *save_status,const psmtp_console_selection *selection,const mtp_navigator *browser) {
     unsigned tries; int32_t rc;
     if(!screen.registered || screen.display_error) return;
 #ifndef PSMTP_PRODUCTION
-    {struct timespec ts;uint64_t start,finish;clock_gettime(CLOCK_MONOTONIC,&ts);start=(uint64_t)ts.tv_sec*1000000+ts.tv_nsec/1000;
+    {struct timespec ts;uint64_t start,finish;psmtp_monotonic_time(&ts);start=(uint64_t)ts.tv_sec*1000000+ts.tv_nsec/1000;
 #endif
     psmtp_console_render(screen.cpu,log,scroll,status,names,save_status,selection,browser);
-    memcpy(screen.buffers[screen.frame],screen.cpu,FRAME_BYTES);
 #ifndef PSMTP_PRODUCTION
-    clock_gettime(CLOCK_MONOTONIC,&ts);finish=(uint64_t)ts.tv_sec*1000000+ts.tv_nsec/1000;screen.render_us+=finish-start;
+    screen.cached_frames+=psmtp_console_render_cached()!=0;
+#endif
+    {size_t uploaded=psmtp_console_render_upload(screen.buffers[screen.frame],screen.cpu,&screen.upload_generation[screen.frame]);
+#ifndef PSMTP_PRODUCTION
+    screen.uploaded_bytes+=uploaded;screen.full_uploads+=uploaded==FRAME_BYTES;
+#else
+    (void)uploaded;
+#endif
+    /* Publish CPU stores, including partial write-combined buffer updates,
+     * before submitting the next display flip. */
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);}
+#ifndef PSMTP_PRODUCTION
+    psmtp_monotonic_time(&ts);finish=(uint64_t)ts.tv_sec*1000000+ts.tv_nsec/1000;screen.render_us+=finish-start;
     if(!screen.timing_started)screen.timing_started=start;++screen.frames;
     if(finish-screen.timing_started>=5000000){
-        unsigned frames=screen.frames;uint64_t elapsed=finish-screen.timing_started,average=screen.render_us/frames;
-
-        screen.frames=0;screen.render_us=0;screen.timing_started=finish;
-        fprintf(screen.log,"stage=render-timing frames=%u elapsed-us=%" PRIu64 " average-render-us=%" PRIu64 " view=%d\n",frames,elapsed,average,selection?selection->view:-1);
+        unsigned frames=screen.frames,cached=screen.cached_frames,full=screen.full_uploads;uint64_t elapsed=finish-screen.timing_started,average=screen.render_us/frames,uploaded=screen.uploaded_bytes;
+        /* Commit the new interval before invoking the application log sink. */
+        screen.frames=screen.cached_frames=screen.full_uploads=0;screen.render_us=screen.uploaded_bytes=0;screen.timing_started=finish;
+        fprintf(screen.log,"stage=render-timing frames=%u elapsed-us=%" PRIu64 " average-render-us=%" PRIu64 " view=%d cached-frames=%u upload-bytes=%" PRIu64 " full-uploads=%u\n",frames,elapsed,average,selection?selection->view:-1,cached,uploaded,full);
     }}
 #endif
     rc=sceVideoOutSubmitFlip(screen.video,screen.frame,ORBIS_VIDEO_OUT_FLIP_VSYNC,++screen.flip);
@@ -84,44 +98,34 @@ void psmtp_screen_draw(const diag_log *log,size_t scroll,const char *status,int 
         if(fs.flipArg==screen.flip) break;
         sceKernelUsleep(1000);
     }
-    if(tries==500) { screen.display_error=-1; return; }
+    if(tries==500) { screen.display_error=-1; return; } /* local display deadline */
     screen.frame^=1;
 }
-uint32_t psmtp_screen_buttons(void) {
-    OrbisPadData pad; uint32_t pressed,held,nav; int32_t rc; struct timespec ts={0}; uint64_t now;
-    if(screen.pad<0 || screen.pad_error) return 0;
-    memset(&pad,0,sizeof(pad)); rc=scePadReadState(screen.pad,&pad);
-    if(rc<0) { screen.pad_error=rc; screen.pad_connected=0; return 0; }
-    screen.pad_connected=pad.connected!=0;
-    if(!pad.connected) { screen.buttons=0; return 0; }
-    held=pad.buttons;
-    if(pad.leftStick.y<64) held|=ORBIS_PAD_BUTTON_UP;
-    if(pad.leftStick.y>192) held|=ORBIS_PAD_BUTTON_DOWN;
-    nav=held&(ORBIS_PAD_BUTTON_UP|ORBIS_PAD_BUTTON_DOWN|ORBIS_PAD_BUTTON_LEFT|ORBIS_PAD_BUTTON_RIGHT|ORBIS_PAD_BUTTON_L1|ORBIS_PAD_BUTTON_R1);
-    pressed=held&~screen.buttons;
-    now=clock_gettime(CLOCK_MONOTONIC,&ts)?0:(uint64_t)ts.tv_sec*1000+(uint64_t)ts.tv_nsec/1000000;
-    if(pressed&nav) screen.repeat_at=now+360;
-    else if(nav && now>=screen.repeat_at) {pressed|=nav;screen.repeat_at=now+90;}
-    screen.buttons=held; return pressed;
-}
-int psmtp_screen_pad_ready(void) { return screen.pad>=0 && !screen.pad_error; }
-int psmtp_screen_pad_connected(void) { return psmtp_screen_pad_ready() && screen.pad_connected; }
-int32_t psmtp_screen_pad_error(void) { return screen.pad_error; }
+uint32_t psmtp_screen_buttons(void){return psmtp_controller_buttons();}
+uint32_t psmtp_screen_buttons_down(void){return psmtp_controller_down();}
+int psmtp_screen_pad_ready(void){return psmtp_controller_ready();}
+int psmtp_screen_pad_connected(void){return psmtp_controller_connected();}
+int32_t psmtp_screen_pad_error(void){return psmtp_controller_error();}
 int32_t psmtp_screen_error(void) { return screen.display_error; }
-void psmtp_screen_close(FILE *log) {
-    int32_t rc;
+int psmtp_screen_shutdown(FILE *log,int release_user) {
+    int32_t rc,first=0;
+    psmtp_console_render_close();
     psmtp_font_close();
     ui_draw_close();
     free(screen.cpu);screen.cpu=NULL;
-    if(screen.pad>=0) { rc=scePadClose(screen.pad); fprintf(log,"stage=pad-close rc=0x%08" PRIx32 "\n",(uint32_t)rc); }
-    if(screen.registered) { rc=sceVideoOutUnregisterBuffers(screen.video,0); fprintf(log,"stage=video-unregister rc=0x%08" PRIx32 "\n",(uint32_t)rc); }
+    first=psmtp_controller_shutdown(log,release_user);
+    if(screen.registered) { rc=sceVideoOutUnregisterBuffers(screen.video,0); fprintf(log,"stage=video-unregister rc=0x%08" PRIx32 "\n",(uint32_t)rc);if(!rc)screen.registered=0;else if(!first)first=rc; }
     if(screen.video>=0) {
         rc=sceVideoOutClose(screen.video); fprintf(log,"stage=video-close rc=0x%08" PRIx32 "\n",(uint32_t)rc);
-        if(rc) { fputs("Display memory retained until process exit because video close failed.\n",log); return; }
+        if(rc) { fputs("Display memory retained until process exit because video close failed.\n",log); return first?first:rc; }
+        screen.video=-1;screen.registered=0;
     }
     if(screen.mapped) {
         rc=sceKernelMunmap(screen.memory,DISPLAY_BYTES); fprintf(log,"stage=video-unmap rc=0x%08" PRIx32 "\n",(uint32_t)rc);
-        if(rc) return;
+        if(rc) return first?first:rc;
+        screen.mapped=0;
     }
-    if(screen.allocated) { rc=sceKernelReleaseDirectMemory(screen.offset,DISPLAY_BYTES); fprintf(log,"stage=video-release rc=0x%08" PRIx32 "\n",(uint32_t)rc); }
+    if(screen.allocated) { rc=sceKernelReleaseDirectMemory(screen.offset,DISPLAY_BYTES); fprintf(log,"stage=video-release rc=0x%08" PRIx32 "\n",(uint32_t)rc);if(!rc)screen.allocated=0;else if(!first)first=rc; }
+    screen.log=NULL;return first;
 }
+void psmtp_screen_close(FILE *log){(void)psmtp_screen_shutdown(log,1);}

@@ -115,39 +115,42 @@ void ui_art(int id,int x,int y,int w,int h,uint32_t tint) {
 }
 void ui_text(int x,int y,int px,int width,const char *s,uint32_t c) {psmtp_font_draw(pixels,x,y,px,width,s?s:"",c);}
 void ui_center(int x,int y,int px,int width,const char *s,uint32_t c) {int text=psmtp_font_width(s,px);ui_text(x+(text<width?(width-text)/2:0),y,px,width,s,c);}
-void ui_backdrop(void) {
-    int x,y;uint32_t *save=pixels;
-    if(!background) {
-        unsigned seed=31;background=malloc(W*H*sizeof(*background));if(!background) {ui_rect(0,0,W,H,UI_RGB(18,16,17));return;}pixels=background;
+static uint32_t *settings_background;
+static void draw_backdrop(int settings) {
+    int x,y;uint32_t *save=pixels;uint32_t **cache=settings?&settings_background:&background;uint32_t *base=*cache;
+    if(!base) {
+        unsigned seed=31;base=malloc(W*H*sizeof(*base));*cache=base;if(!base) {ui_rect(0,0,W,H,UI_RGB(18,16,17));return;}pixels=base;
         for(y=0;y<H;++y) for(x=0;x<W;++x) {
             float center=1.0f-fabsf((x-W*0.5f)/(W*0.5f));int shade=0,r,g,b;
             seed=seed*1664525u+1013904223u;
             if(y<122) shade=11+(int)(center*7);
             else if(y>=950) shade=1+(int)(center*2);
-            else if(x<364 || x>=1478) shade=1+(int)(center*2);
+            else if(settings || x<364 || x>=1478) shade=1+(int)(center*2);
             shade+=(int)((seed>>29)&1);r=18+shade;g=16+shade;b=17+shade;
             pixels[y*W+x]=UI_RGB(r,g,b);
         }
         for(y=0;y<13;++y) for(x=0;x<20;++x) {
             int cx=12+x*103+(y%2)*30,cy=145+y*62+(x%3)*10,kind=(x+3*y)%4;uint32_t c=UI_RGB(141,127,120);
-            if(cy<270 || (cx>364 && cx<1478 && cy<920)) continue;
+            if(cy<270 || (!settings && cx>364 && cx<1478 && cy<920)) continue;
             if(kind==0) ui_ring(cx,cy,6,1,c,40);
             else if(kind==1) {ui_line(cx-5,cy-5,cx+5,cy+5,1,c,44);ui_line(cx+5,cy-5,cx-5,cy+5,1,c,44);}
             else if(kind==2) {ui_line(cx,cy-6,cx-6,cy+5,1,c,40);ui_line(cx-6,cy+5,cx+6,cy+5,1,c,40);ui_line(cx+6,cy+5,cx,cy-6,1,c,40);}
             else {ui_line(cx-5,cy-5,cx+5,cy-5,1,c,36);ui_line(cx+5,cy-5,cx+5,cy+5,1,c,36);ui_line(cx+5,cy+5,cx-5,cy+5,1,c,36);ui_line(cx-5,cy+5,cx-5,cy-5,1,c,36);}
         }
-        ui_rect(0,121,W,1,UI_RGB(53,48,49));ui_rect(363,122,1,828,UI_RGB(39,42,49));ui_rect(1478,122,1,828,UI_RGB(39,42,49));ui_rect(0,950,W,1,UI_RGB(55,48,49));
+        ui_rect(0,121,W,1,UI_RGB(53,48,49));if(!settings){ui_rect(363,122,1,828,UI_RGB(39,42,49));ui_rect(1478,122,1,828,UI_RGB(39,42,49));}ui_rect(0,950,W,1,UI_RGB(55,48,49));
         pixels=save;
     }
-    memcpy(pixels,background,W*H*sizeof(*pixels));
+    memcpy(pixels,base,W*H*sizeof(*pixels));
 }
+void ui_backdrop(void){draw_backdrop(0);}
+void ui_settings_backdrop(void){draw_backdrop(1);}
 void ui_button(int kind,int x,int y,int size,uint32_t color){
     int c=x+size/2,cy=y+size/2,r=size/3,w=size>30?3:2;
     if(kind==UI_BTN_CROSS){ui_line(c-r,cy-r,c+r,cy+r,w,color,255);ui_line(c+r,cy-r,c-r,cy+r,w,color,255);}
     else if(kind==UI_BTN_CIRCLE)ui_ring(c,cy,r,w,color,255);
     else if(kind==UI_BTN_TRIANGLE){ui_line(c,y+size/6,x+size/6,y+size*5/6,w,color,255);ui_line(x+size/6,y+size*5/6,x+size*5/6,y+size*5/6,w,color,255);ui_line(x+size*5/6,y+size*5/6,c,y+size/6,w,color,255);}
     else if(kind==UI_BTN_SQUARE){ui_box(x+size/6,y+size/6,size*2/3,size*2/3,1,0,color,w);}
-    else if(kind==UI_BTN_DPAD){ui_box(x+size/3,y,size/3,size,2,color,0,0);ui_box(x,y+size/3,size,size/3,2,color,0,0);}
+    else if(kind==UI_BTN_DPAD){int g=size>28?3:2,b=size>28?3:2,o=size>28?13:size*11/28,d;for(d=g;d<=o;++d){int h=d-g<b?d-g:d==o?b-1:b,w=2*h+1;ui_rect(c-h,cy-d,w,1,color);ui_rect(c-h,cy+d,w,1,color);ui_rect(c-d,cy-h,1,w,color);ui_rect(c+d,cy-h,1,w,color);}}
     else if(kind==UI_BTN_OPTIONS){int i;ui_box(x+size/5,y,size*3/5,size,5,0,color,2);for(i=0;i<3;++i)ui_rect(x+size/3,y+size/3+i*size/6,size/3,2,color);}
     else if(kind==UI_BTN_TOUCH){ui_box(x,y+size/5,size,size*3/5,4,0,color,2);ui_rect(x+size/3,cy-2,2,2,color);ui_rect(x+size*2/3,cy-2,2,2,color);}
     else {static const char *const labels[]={"L1","R1","L2","R2","L3","R3"};int k=kind-UI_BTN_L1;if(k<0 || k>5)return;
@@ -161,4 +164,4 @@ void ui_image(const uint32_t *data,unsigned width,unsigned height,int x,int y,in
     for(row=0;row<th;++row)for(col=0;col<tw;++col){uint32_t c=data[(size_t)((uint64_t)row*height/th)*width+(unsigned)((uint64_t)col*width/tw)];put(x+col,y+row,c,c>>24);}
 }
 void ui_draw_begin(uint32_t *p) {pixels=p;}
-void ui_draw_close(void) {unsigned i;free(background);background=NULL;pixels=NULL;for(i=0;i<64;++i)free(surfaces[i].data);memset(surfaces,0,sizeof(surfaces));surface_bytes=0;surface_clock=0;}
+void ui_draw_close(void) {unsigned i;free(background);background=NULL;free(settings_background);settings_background=NULL;pixels=NULL;for(i=0;i<64;++i)free(surfaces[i].data);memset(surfaces,0,sizeof(surfaces));surface_bytes=0;surface_clock=0;}

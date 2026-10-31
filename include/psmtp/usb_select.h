@@ -19,10 +19,16 @@ typedef struct {
     uint8_t number, alternate, cls, subclass, protocol;
     size_t endpoint_count;
     usb_endpoint endpoints[USB_MAX_ENDPOINTS];
+    uint8_t string_index,mtp_identified;
 } usb_alt;
-typedef struct { uint8_t interface_number, bulk_in, bulk_out, interrupt_in; uint16_t out_max_packet,in_max_packet; } usb_mtp_interface;
-/* 0=unique standard still-image candidate; -1=none; -2=ambiguous; -3=invalid. */
+typedef struct { uint8_t interface_number, bulk_in, bulk_out, interrupt_in; uint16_t out_max_packet,in_max_packet; uint8_t alternate; } usb_mtp_interface;
+/* Prefer a standard still-image interface; vendor interfaces require positive
+ * MTP identification. Prefer alternate zero, then the lowest usable alternate
+ * on the same interface. Never guess between distinct eligible interfaces.
+ * Returns 0=unique, -1=none, -2=ambiguous, -3=invalid. */
 int usb_select_mtp(const usb_alt *, size_t, usb_mtp_interface *);
 
 int usb_parse_config(const uint8_t *, size_t, usb_alt *, size_t *, uint8_t *);
+int usb_mtp_os_vendor_code(const uint8_t *,size_t,uint8_t *);
+int usb_mtp_compatible_interfaces(const uint8_t *,size_t,uint8_t [256]);
 #endif

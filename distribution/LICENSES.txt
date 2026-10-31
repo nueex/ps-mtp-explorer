@@ -1,4 +1,9 @@
 PS MTP Explorer - current original-work licensing notice (2026-10-26)
+
+Local production build 1.02 (2026-10-28): matching application sources and
+component notices accompany this PKG in the local release bundle. Historical
+versioned links below describe earlier releases, not the 1.02 corresponding
+source. No remote publication or upload is part of this local build.
 Original Author: nueex - Copyright (C) 2026 nueex
 
 Original work owned by nueex is licensed under GNU GPL version 3 or, at your
@@ -453,6 +458,12 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
 stb_image.h
+T12-A1 uses the exact upstream dev header at commit
+2838bd5823c095dd1d5b5d8fac0b4fc8aa72a36d (header version string v2.30).
+Source: https://raw.githubusercontent.com/nothings/stb/2838bd5823c095dd1d5b5d8fac0b4fc8aa72a36d/stb_image.h
+SHA-256: 06d445a53ee6172fa41ac382dfed9648a7719943dbe76fc18ae11ec161898416
+The JPEG/PNG integration supplies the upstream mad4 checked-arithmetic helper
+omitted by this development snapshot's conditional definition guard.
 This software is available under 2 licenses -- choose whichever you prefer.
 ------------------------------------------------------------------------------
 ALTERNATIVE A - MIT License

@@ -13,5 +13,6 @@
 void psmtp_audio_open(FILE *);
 void psmtp_audio_notify(unsigned,FILE *);
 void psmtp_audio_status(FILE *);
-void psmtp_audio_close(FILE *);
+void psmtp_audio_stop(void);
+int psmtp_audio_close(FILE *);
 #endif

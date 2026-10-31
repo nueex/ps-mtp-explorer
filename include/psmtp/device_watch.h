@@ -14,9 +14,10 @@
 #define PSMTP_DEVICE_POLL_MS 100u
 typedef struct {uint8_t bus,address;uint16_t vendor,product;uint32_t signature;} psmtp_device_record;
 typedef struct {psmtp_device_record record;uint64_t connection,retry_at,name_retry_at;int ready,mtp;unsigned name_attempts;char name[96];} psmtp_watched_device;
-typedef struct {psmtp_watched_device entries[PSMTP_WATCH_MAX];size_t count;uint64_t next_connection;} psmtp_device_watch;
+typedef struct {psmtp_watched_device entries[PSMTP_WATCH_MAX];size_t count,next_probe;uint64_t next_connection;} psmtp_device_watch;
 /* probe returns 1=MTP, 0=another device, -1=temporarily unavailable.
- * Quiet polls classify at most one new/retry device; force classifies all. */
+ * Quiet polls classify at most one device fairly; negatives are rechecked for
+ * mode changes. Force revalidates cached classifications. */
 int psmtp_device_watch_update(psmtp_device_watch *,const psmtp_device_record *,size_t,uint64_t,int,int (*)(void *,size_t),void *,psmtp_ps4_candidate *);
 
 #define PSMTP_DEVICE_ADDED 1u

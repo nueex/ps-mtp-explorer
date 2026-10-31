@@ -85,6 +85,26 @@ static int browse_directory(const char *path,const char *root) {
     return fd;
 }
 unsigned psmtp_local_usb_mask(void) {return psmtp_local_usb_scan(NULL);}
+int psmtp_native_output_access(int fd,int directory,int usb,FILE *log) {
+    psmtp_native_stat before,after;unsigned mode=directory?0777:0666;int rc,error,shared;
+    if(store_stat(fd,&before)) return MTP_FILESYSTEM;
+    if(directory?!S_ISDIR(before.st_mode):!S_ISREG(before.st_mode)) return MTP_VERIFY;
+    /* An already shared container may belong to another service. No ownership
+     * change or chmod privilege is needed when its mode is already correct. */
+    rc=(before.st_mode&07777)==mode?0:fchmod(fd,mode);error=rc?errno:0;
+    if(store_stat(fd,&after)) return MTP_FILESYSTEM;
+    if(before.st_dev!=after.st_dev || before.st_ino!=after.st_ino ||
+       (before.st_mode&S_IFMT)!=(after.st_mode&S_IFMT)) return MTP_VERIFY;
+    shared=(after.st_mode&mode)==mode;
+    if(log) fprintf(log,"stage=output-access object=%s usb=%d requested=%04o observed=%04o chmod-status=%d errno=%d shared-write=%d\n",
+        directory?"directory":"file",usb,mode,(unsigned)(after.st_mode&0777),rc,error,shared);
+    /* FAT/exFAT can expose mount-wide modes, rather than per-file Unix modes.
+     * Keep existing USB transfers working, but record when sharing could not
+     * be established. Do not change a user's mount or unrelated parent. */
+    if(usb && (!rc || error==ENOTSUP || error==ENOSYS || error==EPERM)) return 0;
+    if(rc) {errno=error;return MTP_FILESYSTEM;}
+    return shared && (after.st_mode&07777)==mode?0:MTP_VERIFY;
+}
 int psmtp_local_prepare_copies(FILE *log) {
     const char *paths[]={PSMTP_LOG_DIRECTORY,PSMTP_COPY_DIRECTORY};size_t i;
     for(i=0;i<2;++i) {
@@ -99,10 +119,14 @@ int psmtp_local_prepare_copies(FILE *log) {
             else {
                 if(store_stat(fd,&st)) error=errno;
                 else if(!S_ISDIR(st.st_mode)) error=ENOTDIR;
+                /* Only the app's output container is shared. Logs and /data
+                 * retain their existing permissions. No recursive chmod. */
+                else if(i) {int access=psmtp_native_output_access(fd,1,0,log);if(access)error=access==MTP_FILESYSTEM?errno:EIO;}
+                if(!error && i && fsync(fd)) error=errno;
                 if(close(fd) && !error) error=errno;
             }
         }
-        if(log) fprintf(log,"stage=storage-prepare directory=%s status=%d errno=%d existing-modes-changed=0\n",i?"copies":"logs",error?MTP_FILESYSTEM:0,error);
+        if(log) fprintf(log,"stage=storage-prepare directory=%s status=%d errno=%d output-container-shared=%d\n",i?"copies":"logs",error?MTP_FILESYSTEM:0,error,i && !error);
         if(error) {errno=error;return MTP_FILESYSTEM;}
     }
     return 0;
@@ -240,6 +264,7 @@ int psmtp_local_load(psmtp_local_browser *b,const char *path) {
         if(!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode)) {++b->skipped;continue;}
         if(b->count==PSMTP_LOCAL_ITEMS) {b->truncated=1;break;}
         item=&b->entries[b->count];strcpy(item->path,child);strcpy(item->name,entry->d_name);item->folder=S_ISDIR(st.st_mode);item->bytes=st.st_size<0?0:(uint64_t)st.st_size;
+        item->modified_seconds=st.modify_time.seconds;item->modified_nanoseconds=st.modify_time.nanoseconds;
         if(st.modify_time.seconds>0) {time_t changed=(time_t)st.modify_time.seconds;struct tm *date=localtime(&changed);if(date) strftime(item->modified,sizeof(item->modified),"%Y%m%dT%H%M%S",date);}
         if(staging && item->folder && !store_load_receipt(child,&r)) {
             strcpy(item->name,r.name);item->bytes=r.bytes;
@@ -248,7 +273,7 @@ int psmtp_local_load(psmtp_local_browser *b,const char *path) {
                 if(!store_join(file,child,r.data_name)) {
                     fd=open(file,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
                     if(fd>=0) {
-                    if(!store_stat(fd,&st) && S_ISREG(st.st_mode) && st.st_size>=0 && (uint64_t)st.st_size==r.bytes) {found=1;strcpy(item->path,file);}
+                    if(!store_stat(fd,&st) && S_ISREG(st.st_mode) && st.st_size>=0 && (uint64_t)st.st_size==r.bytes) {found=1;strcpy(item->path,file);item->modified_seconds=st.modify_time.seconds;item->modified_nanoseconds=st.modify_time.nanoseconds;}
                     if(close(fd)) found=0;
                     }
                 }
@@ -330,7 +355,7 @@ int psmtp_folder_finish(psmtp_folder_store *store,int complete) {
     for(i=store->count;i>0;--i) if(store->nodes[i-1].created) {
         psmtp_folder_node *node=&store->nodes[i-1];int fd=store_pin_node(node),rc;psmtp_native_stat st;
         if(fd<0) {error=MTP_FILESYSTEM;continue;}
-        if(fchmod(fd,0755) || store_stat(fd,&st) || (st.st_mode&0777)!=0755) error=MTP_FILESYSTEM;
+        if(psmtp_native_output_access(fd,1,0,store->log) || store_stat(fd,&st)) error=MTP_FILESYSTEM;
         if(fsync(fd)) error=MTP_FILESYSTEM;
         if(complete && !error) {
             char path[PSMTP_LOCAL_PATH];int mark;

@@ -6,7 +6,7 @@
 # WITHOUT ANY WARRANTY; see LICENSE.
 # Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
 
-"""Build PS MTP Explorer with an installed OpenOrbis SDK.
+"""Build PS MTP Explorer with the installed OpenOrbis SDK.
 
 No Sony SDK, kernel patch, device connection or deployment is performed.
 """
@@ -24,21 +24,37 @@ import sys
 from embed_font import embed
 from inspect_ps4 import converted_image, elf as inspect_elf, application_exit_imports
 from ps4_runtime import stage_runtime, runtime_inventory, PACKAGE_FILES
-from package_identity import validate_identity, validate_package_identity
+from package_identity import validate_identity, validate_package_identity, validate_dialog_controls, COMMON_DIALOG_ATTRIBUTE
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ['src/pkg.c','src/transfer_meter.c','src/ps4/package_install.c','src/ps4/storage_space.c','src/keyboard.c','src/metadata.c','src/ps4/preview.c','src/name.c','src/device_sound.c','src/usb_label.c','src/ps4/device_audio.c','src/device_watch.c','src/locations.c','src/ui_format.c','src/copy_plan.c','src/ps4/ui_font.c','src/ps4/ui_draw.c','src/ps4/file_store.c','src/ps4/file_ops.c','src/copy.c', 'src/sha256.c', 'src/mtp.c', 'src/usb_select.c', 'src/navigator.c', 'src/browser.c', 'src/diagnostic.c',
-           'src/diag_log.c', 'src/usb_module.c', 'src/ps4/copy_file.c', 'src/ps4/usb_ps4.c', 'src/ps4/console_render.c', 'src/ps4/screen.c', 'src/ps4/exit.c', 'src/ps4/main.c','src/ps4/process_access.c','third_party/libjbc/jailbreak.c','third_party/libjbc/kernelrw.c']
-CONTENT_ID = 'IV0000-NUEX00001_00-NUEEXMTP00000000'
-TITLE_ID = 'NUEX00001'
-RELEASE = '1.01'
+SOURCES = ['src/ps4/update_client.c','src/ps4/system_dialog.c','src/update.c','src/http_range.c','src/install_error.c','src/shutdown.c','src/ps4/controller.c','src/ps4/ime.c','src/ps4/notify.c','src/ps4/preferences.c','src/ps4/download.c','src/ps4/work.c','src/sparse_verify.c','src/pkg.c','src/transfer_meter.c','src/ps4/phone_install_server.c','src/ps4/package_install.c','src/ps4/storage_space.c','src/keyboard.c','src/metadata.c','src/ps4/preview.c','src/name.c','src/device_sound.c','src/usb_label.c','src/ps4/device_audio.c','src/device_watch.c','src/locations.c','src/ui_format.c','src/copy_plan.c','src/ps4/ui_font.c','src/ps4/ui_draw.c','src/ps4/file_store.c','src/ps4/file_ops.c','src/copy.c', 'src/sha256.c', 'src/mtp.c', 'src/usb_select.c', 'src/navigator.c', 'src/browser.c', 'src/diagnostic.c',
+           'src/diag_log.c', 'src/usb_module.c', 'src/ps4/copy_file.c', 'src/ps4/usb_ps4.c', 'src/ps4/console_render.c', 'src/ps4/screen.c', 'src/ps4/exit.c', 'src/ps4/lifecycle.c', 'src/ps4/main.c','src/ps4/process_access.c','third_party/libjbc/jailbreak.c','third_party/libjbc/kernelrw.c']
+TITLE_ID = re.search(r'^#define PSMTP_TITLE_ID "([^"]+)"$',
+                     (ROOT/'include/psmtp/version.h').read_text(),re.MULTILINE).group(1)
+CONTENT_ID = 'IV0000-'+TITLE_ID+'_00-NUEEXMTP00000000'
+RELEASE = '2.0.0'
+
+# These units contain HEN kernel callbacks/assembly that cannot use userland
+# stack guards. All standard application and image-decoder units stay protected.
+STACK_PROTECTOR_EXCLUSIONS = {
+    'third_party/libjbc/jailbreak.c': 'HEN kernel-context callback code',
+    'third_party/libjbc/kernelrw.c': 'HEN kernel-context callbacks and assembly',
+}
 
 def package_version():
-    version = re.search(r'#define PSMTP_VERSION "([^"]+)"', (ROOT/'include/psmtp/version.h').read_text()).group(1)
-    if version != RELEASE or not re.fullmatch(r'\d{1,2}\.\d{2}', version):
-        raise ValueError('Release and application version must match the PS4 major.minor format')
-    major, minor = version.split('.')
-    return f'{int(major):02d}.{minor}'
+    header = (ROOT/'include/psmtp/version.h').read_text()
+    version = re.search(r'#define PSMTP_VERSION "([^"]+)"', header).group(1)
+    if re.search(r'#define PSMTP_TITLE_ID "([^"]+)"', header).group(1) != TITLE_ID:
+        raise ValueError('Installer self-replacement guard and packaged TITLE_ID must match')
+    match = re.fullmatch(r'(\d{1,2})\.(\d)\.(\d)', version)
+    if version != RELEASE or not match:
+        raise ValueError('Release must match the displayed major.minor.patch version within PS4 numeric limits')
+    major, minor, patch = map(int, match.groups())
+    native = f'{major:02d}.{minor}{patch}'
+    declared = re.search(r'^#define PSMTP_PACKAGE_VERSION "([^"]+)"$', header, re.MULTILINE)
+    if not declared or declared.group(1) != native:
+        raise ValueError('PS4 package metadata and updater comparison version must match the release')
+    return native
 
 def sha(path):
     with Path(path).open('rb') as source:
@@ -66,12 +82,17 @@ def main():
     parser.add_argument('--experimental-usb', action='store_true',
                         help='acknowledge the documented unverified USB ABI')
     parser.add_argument('--production', action='store_true', help='build without diagnostic logging or development metadata')
-    parser.add_argument('--package', action='store_true', help='also build and validate experimental PKG')
+    parser.add_argument('--package', action='store_true', help='also build, extract and validate the PS4 PKG')
+    parser.add_argument('--diagnostic-build', default='20261028-output-access-p1', help='local diagnostic journal build marker (experimental profile only)')
     parser.add_argument('--output', default=str(ROOT/'build-ps4'))
     args = parser.parse_args()
+    if not args.diagnostic_build or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in args.diagnostic_build):
+        parser.error('diagnostic build marker must contain only lowercase ASCII letters, digits and hyphens')
     validate_identity(TITLE_ID, CONTENT_ID)
     if not args.production and not args.experimental_usb:
         parser.error('select --production or --experimental-usb')
+    if args.production and args.experimental_usb:
+        parser.error('select only one build profile: --production or --experimental-usb')
     app_version = package_version()
     sdk = Path(args.sdk).resolve()
     for p in ['include/stdio.h', 'include/orbis/Usbd.h', 'lib/crt1.o', 'lib/libc.a', 'lib/libkernel.so', 'link.x']:
@@ -88,16 +109,16 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     embed()
     source_inputs=(SOURCES+['tools/build_ps4.py','tools/ps4_runtime.py','tools/package_identity.py','distribution/LICENSES.txt','src/ps4/link.x','src/ps4/font_data.inc','src/ps4/reference_assets.inc','assets/reference/icon0.png','assets/reference/provenance.json','assets/fonts/NotoSans-Light.ttf','assets/fonts/OFL.txt']+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'assets/icons').iterdir()) if p.is_file()]+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'include').rglob('*.h'))]+
-        [p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'src/ps4').glob('*.h'))]+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'third_party/libjbc').iterdir()) if p.is_file() and p.suffix!='.c'])
-    report = {'release': RELEASE, 'app_version': app_version, 'production': args.production, 'diagnostic_logging': not args.production, 'experimental': not args.production, 'hardware_tested': False, 'usb_tests_enabled': True,
+        [p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'src/ps4').glob('*.h'))]+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'third_party/libjbc').iterdir()) if p.is_file() and p.suffix!='.c']+['third_party/stb/stb_image.h','src/preview_decode_budget.h'])
+    report = {'release': RELEASE, 'app_version': app_version, 'production': args.production, 'diagnostic_logging': not args.production, 'diagnostic_build': None if args.production else args.diagnostic_build, 'user_output_file_mode': '0666', 'user_output_directory_mode': '0777', 'usb_mount_permissions_authoritative': True, 'android_mtp_descriptor_identification': True, 'experimental': not args.production, 'hardware_tested': False, 'usb_tests_enabled': True, 'shutdown_build': '20261028-lifecycle-1.02', 'shutdown_source_baseline': '20261027-startup-repair-r2', 'persistent_shutdown_journal': not args.production, 'native_orbis_signal_handlers': True, 'credential_snapshot_experiment': False, 'filesystem_access_profile': 'console-tested-libjbc-kernel-copy',
               'phone_upload': True, 'upload_max_file_bytes': (2**64-1)//8, 'large_phone_upload': True, 'large_upload_requires_partial64_and_size64': True, 'large_upload_sentinel_header': True, 'large_transfer_hardware_tested': False, 'pretransfer_space_check': True, 'verification_status_only': True, 'layered_system_chimes': True, 'diagnostic_render_reentry_guard': True, 'render_timing_committed_before_logging': True, 'fullscreen_settings': True, 'sort_picker': True, 'qwerty_keyboard': True, 'controller_glyphs': True, 'audio_system_main_stereo': True, 'copy_reserve_bytes': 0, 'copy_destination_prefill': False, 'copy_source_content_passes': 1, 'copy_destination_hash_passes': 0,
-              'live_transfer_speed':True,'recent_window_eta':True,'direct_pkg_install':True,'phone_pkg_staging':True,'installer_loopback_only':False,'installer_network_required':False,'installer_transport':'native-storage','saved_pkg_retained':False,'phone_install_copy_cleanup_after_success':True,'phone_install_copy_cleanup_after_failure':True,'persistent_paste_slot':True,'non_pkg_properties_only':True,'mtp_session_reopen_recovery':True,'quick_copy_verification':True,'live_directory_refresh':True,'new_folder':True,'settings_disabled':True,'installer_source_preserved':True,
+              'live_transfer_speed':True,'recent_window_eta':True,'direct_pkg_install':True,'phone_pkg_staging':True,'phone_install_modes':['fast','phone-direct'],'phone_install_default':'fast','optional_phone_installer_transport':'loopback-http','direct_phone_staging_copy':False,'phone_direct_boost_chunk_bytes':1048576,'phone_direct_compat_chunk_bytes':262144,'phone_direct_compat_queue_slots':2,'phone_direct_boost_queue_slots':4,'phone_direct_source_readers':1,'phone_direct_max_pipeline_buffer_bytes':16777216,'phone_direct_boost_uses_saved_setting':True,'phone_direct_large_rejection_fallback':'before-data-only','direct_phone_external_server_required':False,'direct_phone_network_apis_optional':True,'installer_loopback_only':False,'installer_network_required':False,'installer_transport':'native-storage','saved_pkg_retained':False,'phone_install_copy_cleanup_after_success':True,'phone_install_copy_cleanup_after_failure':True,'persistent_paste_slot':True,'non_pkg_properties_only':True,'mtp_session_reopen_recovery':True,'quick_copy_verification':True,'live_directory_refresh':True,'new_folder':True,'settings_disabled':True,'installer_source_preserved':True,
               'rename': True, 'background_metadata_previews': True, 'controller_toolbar': True, 'cached_cpu_rendering': True,
               'device_connection_chimes': True, 'discovery_phone_names': True, 'automatic_device_watch': True, 'device_poll_ms': 100, 'retained_phone_session': True, 'loading_delay_ms': 180,
               'process_filesystem_access': True, 'access_profile': 'HEN syscall 11 / runtime process checks / original Unix identity with libjbc Sony capacity credentials', 'capacity_unknown_policy': 'checked-io', 'cross_firmware_hardware_verified': False, 'libjbc_commit': '835fe016ff0ae5dd89b9249f39cc0fe093fd07dd', 'mtp_tests_enabled': True, 'interactive_browser_enabled': True, 'verified_copy_enabled': True, 'copy_private_directory': True, 'copy_descriptor_checks': True, 'copy_absolute_open': True, 'clipboard_operations': True, 'phone_to_native_paste': True, 'native_copy_move_delete': True, 'phone_delete': True, 'direct_usb_probe': True, 'device_drawer': True, 'mounted_usb_browsing': True, 'internal_browsing': True, 'modern_explorer_ui': True, 'outline_font': 'Noto Sans Light OFL', 'recursive_folder_copy': True, 'folder_shared_reserve': False, 'copy_staging_directory': '/data/psmtp/copies', 'copy_readable_output': True, 'copy_native_stat_abi': True, 'copy_allocated_capacity': False, 'usbd_review_sha256':'9cc9d4b4021b66dab5c09ada373cdd042d68e23b5de1ca515d50b82abec28bff', 'sdk': str(sdk),
               'sdk_files_sha256': {p: sha(sdk/p) for p in ['include/orbis/Usbd.h', 'include/orbis/_types/libusb.h',
                   'include/orbis/libkernel.h', 'include/orbis/AudioOut.h', 'include/orbis/_types/audio_out.h', 'include/orbis/VideoOut.h', 'include/orbis/Pad.h',
-                  'include/orbis/UserService.h', 'include/orbis/Sysmodule.h', 'include/orbis/SystemService.h', 'include/orbis/_types/sysmodule.h',
+                  'include/orbis/UserService.h', 'include/orbis/AppInstUtil.h', 'include/orbis/_types/appinst_util.h', 'include/orbis/Sysmodule.h', 'include/orbis/SystemService.h', 'include/orbis/_types/sysmodule.h',
                   'include/orbis/_types/kernel.h', 'include/sys/stat.h', 'include/bits/stat.h', 'include/sys/statfs.h', 'include/bits/statfs.h', 'include/fcntl.h', 'include/bits/fcntl.h', 'include/unistd.h', 'include/bits/alltypes.h', 'include/stb/stb_image.h', 'include/stb/stb_truetype.h', 'lib/crt1.o', 'lib/libc.a',
                   'lib/libkernel.so', 'lib/libSceAudioOut.so', 'lib/libSceVideoOut.so', 'lib/libScePad.so', 'lib/libSceUserService.so', 'lib/libSceSysmodule.so', 'lib/libSceSystemService.so', 'link.x']},
               'sources_sha256': {p: sha(ROOT/p) for p in source_inputs}, 'steps': []}
@@ -114,15 +135,41 @@ def main():
                                 'exit_code': result.returncode, 'output': result.stdout})
         (output/'build-report.json').write_text(json.dumps(report, indent=2)+'\n')
         if result.returncode:
-            raise SystemExit(f'{label} failed ({result.returncode}); see build-ps4/build-report.json')
+            raise SystemExit(f'{label} failed ({result.returncode}); see {output / "build-report.json"}')
         return result.stdout
     target = 'x86_64-freestanding' if is_zig else 'x86_64-pc-freebsd12-elf'
+    report['transfer_base'] = 't6'
+    report['speed_boost_setting'] = True
+    report['speed_boost_default'] = False
+    report['platform_update'] = 't12'
+    report['common_dialog_confirm_button'] = 'cross'
+    report['common_dialog_sfo_attribute'] = COMMON_DIALOG_ATTRIBUTE
+    report['restore_defaults_completion_dialog'] = True
+    report['app_notifications_copy_move_only'] = True
+    report['restore_defaults_setting'] = True
+    report['copy_notifications_at_start_and_finish'] = True
+    report['delete_notifications'] = False
+    report['clipboard_selection_notifications'] = False
+    report['native_ime_center'] = [960, 540]
+    report['native_ime_exclusive_input'] = True
+    report['device_label_wrapping'] = True
+    report['system_background_installation'] = True
+    report['native_notifications'] = True
+    report['native_ime_dialog'] = True
+    report['retain_staged_phone_pkg_on_early_close'] = True
+    report['persistent_preferences'] = True
+    report['preferences_path'] = '/data/psmtp/preferences.cfg'
+    report['phone_stream_default_read_bytes'] = 262144
+    report['phone_stream_boost_read_bytes'] = 1048576
     report['compiler_version'] = run('compiler version',cc+['--version']).strip()
     report['compiler_sha256'] = sha(cc[0]) if Path(cc[0]).is_file() else None
     flags = ['-target', target, '-std=c99', '-D_POSIX_C_SOURCE=200809L', '-DPSMTP_EXPERIMENTAL_PS4_USB=1',
              '-nostdinc', '-I'+str(ROOT/'include'), '-isystem', str(sdk/'include'),
              '-isystem', str(sdk/'include/orbis/_types'), '-isystem', str(sdk/'include/stb'), '-fPIC', '-funwind-tables',
-             '-fshort-wchar', '-fno-stack-protector', '-Wall', '-Wextra', '-Werror', '-O2']
+             '-fshort-wchar', '-fstack-protector-strong', '-Wall', '-Wextra', '-Werror', '-O2']
+    if not args.production:
+        flags += ['-DPSMTP_DIAGNOSTIC_BUILD="'+args.diagnostic_build+'"',
+                  '-ffile-prefix-map='+str(ROOT)+'=.', '-fdebug-prefix-map='+str(ROOT)+'=.']
     if args.production:
         flags += ['-DPSMTP_PRODUCTION=1','-DNDEBUG','-g0','-fno-ident',
                   '-ffile-prefix-map='+str(ROOT)+'=.', '-fdebug-prefix-map='+str(ROOT)+'=.',
@@ -130,11 +177,19 @@ def main():
     objects = []
     active_sources = [s for s in SOURCES if not args.production or s not in ('src/browser.c','src/diagnostic.c')]
     report['compiled_sources'] = active_sources
+    report['stack_protection'] = {
+        'flag': '-fstack-protector-strong',
+        'excluded_sources': STACK_PROTECTOR_EXCLUSIONS,
+        'runtime_provider': 'OpenOrbis SDK libc.a; verify guard/init/fail in final ELF',
+        'languages': ['C'],
+    }
     for source in active_sources:
         obj = output / (source.replace('/', '_') + '.o')
         compile_flags=flags
         if source.startswith('third_party/libjbc/'):
             compile_flags=flags+['-std=gnu99','-ffreestanding','-mno-red-zone','-mno-sse','-mno-sse2','-mno-mmx','-fno-asynchronous-unwind-tables','-fno-unwind-tables','-Wno-unused-parameter']
+        if source in STACK_PROTECTOR_EXCLUSIONS:
+            compile_flags=compile_flags+['-fno-stack-protector']
         run('compile '+source, cc+compile_flags+['-c', ROOT/source, '-o', obj])
         objects.append(obj)
     elf = output/'psmtp.elf'
@@ -189,12 +244,13 @@ def package(sdk, output, run, report):
     run('create SFO',[pkgtool,'sfo_new',sfo])
     fields = {
         'APP_TYPE': ('Integer',4,'1'), 'APP_VER': ('Utf8',8,package_version()),
-        'ATTRIBUTE': ('Integer',4,'0'), 'CATEGORY': ('Utf8',4,'gd'),
+        'ATTRIBUTE': ('Integer',4,str(COMMON_DIALOG_ATTRIBUTE)), 'CATEGORY': ('Utf8',4,'gd'),
         'CONTENT_ID': ('Utf8',48,CONTENT_ID), 'DOWNLOAD_DATA_SIZE': ('Integer',4,'0'),
         'SYSTEM_VER': ('Integer',4,'0'), 'TITLE': ('Utf8',128,'PS MTP Explorer'),
         'TITLE_ID': ('Utf8',12,TITLE_ID), 'VERSION': ('Utf8',8,package_version())}
     for key,(kind,cap,value) in fields.items():
         run('SFO '+key,[pkgtool,'sfo_setentry',sfo,key,'--type',kind,'--maxsize',str(cap),'--value',value])
+    validate_dialog_controls(read_sfo(sfo))
     shutil.copyfile(ROOT/'assets/reference/icon0.png',stage/'sce_sys/icon0.png')
     right = sdk/'samples/hello_world/sce_sys/about/right.sprx'
     if not right.is_file(): raise SystemExit('Missing SDK sample about module: '+str(right))
@@ -206,7 +262,8 @@ def package(sdk, output, run, report):
                     ' '.join(PACKAGE_FILES)],stage)
     pkg = output/(CONTENT_ID+'.pkg')
     if pkg.exists(): pkg.unlink()  # exact generated build artifact
-    run('build experimental PKG',[pkgtool,'pkg_build',stage/'diagnostic.gp4',output])
+    profile = 'production' if report['production'] else 'experimental'
+    run('build '+profile+' PKG',[pkgtool,'pkg_build',stage/'diagnostic.gp4',output])
     if not pkg.is_file() or pkg.read_bytes()[:4]!=b'\x7fCNT':
         raise SystemExit('PKG output missing or bad magic')
     validation = run('validate PKG hashes and signatures',[pkgtool,'pkg_validate',pkg])
@@ -215,7 +272,7 @@ def package(sdk, output, run, report):
     run('inspect SFO',[pkgtool,'sfo_listentries',sfo])
     # Extract independently through the package reader, then compare actual payloads.
     extracted = output/'verified-extract'
-    run('extract experimental PKG for round-trip check',[pkgtool,'pkg_extract',pkg,extracted])
+    run('extract '+profile+' PKG for round-trip check',[pkgtool,'pkg_extract',pkg,extracted])
     # pkg_extract produces an inner-PFS "uroot" directory. SFO/icon live in
     # the PKG metadata table, not that filesystem. Extract those entries separately.
     pkg_bytes = pkg.read_bytes()
@@ -244,6 +301,7 @@ def package(sdk, output, run, report):
         elif sha(stage/name)!=sha(extracted/'uroot'/name):
             raise SystemExit('PKG round-trip mismatch: '+name)
     report['identity_validation'] = validate_package_identity(pkg,read_sfo(extracted/'uroot/sce_sys/param.sfo'))
+    report['dialog_controls_validation'] = validate_dialog_controls(read_sfo(extracted/'uroot/sce_sys/param.sfo'))
     report['package'] = {'content_id': CONTENT_ID, 'title_id': TITLE_ID,
         'sha256': sha(pkg), 'bytes': pkg.stat().st_size,
         'payload_sha256':{p:sha(extracted/'uroot'/p) for p in payloads},

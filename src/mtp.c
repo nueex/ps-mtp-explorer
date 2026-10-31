@@ -129,8 +129,23 @@ int mtp_parse_ids(const uint8_t *p,size_t n,uint32_t *ids,size_t cap,size_t *cou
 void mtp_init(mtp_client *c,mtp_transport io) {
     memset(c,0,sizeof(*c)); c->io=io; c->timeout_ms=5000;c->out_max_packet=512;
 }
+static uint64_t mtp_clock(mtp_client *c) {
+    uint64_t now=c->io.now_ms(c->io.user),paused=c->paused_ms?c->paused_ms(c->control_user):0;
+    return now>=paused?now-paused:0;
+}
+static int mtp_checkpoint(mtp_client *c) {return c->io_checkpoint?c->io_checkpoint(c->control_user):0;}
+static int mtp_read_io(mtp_client *c,uint8_t *bytes,size_t n,size_t *got,uint32_t timeout) {
+    int rc=mtp_checkpoint(c);if(rc){*got=0;return rc;}
+    rc=c->io.read(c->io.user,bytes,n,got,timeout);
+    {int gate=mtp_checkpoint(c);return gate?gate:rc;}
+}
+static int mtp_write_io(mtp_client *c,const uint8_t *bytes,size_t n,size_t *got,uint32_t timeout) {
+    int rc=mtp_checkpoint(c);if(rc){*got=0;return rc;}
+    rc=c->io.write(c->io.user,bytes,n,got,timeout);
+    {int gate=mtp_checkpoint(c);return gate?gate:rc;}
+}
 static uint32_t remaining(mtp_client *c,uint64_t start) {
-    uint64_t elapsed=c->io.now_ms(c->io.user)-start;
+    uint64_t elapsed=mtp_clock(c)-start;
     return elapsed>=c->timeout_ms?0:c->timeout_ms-(uint32_t)elapsed;
 }
 static int exact_profile(mtp_client *c,uint8_t *out,size_t n,uint64_t start,mtp_download_stats *stats) {
@@ -139,9 +154,9 @@ static int exact_profile(mtp_client *c,uint8_t *out,size_t n,uint64_t start,mtp_
         if(c->rx_pos==c->rx_len) {
             ms=remaining(c,start); if(!ms) return MTP_TIMEOUT;
             got=0;
-            {uint64_t before=stats?c->io.now_ms(c->io.user):0;
-            e=c->io.read(c->io.user,c->rx,sizeof(c->rx),&got,ms);
-            if(stats){uint64_t after=c->io.now_ms(c->io.user);++stats->read_calls;stats->read_bytes+=got;if(after>=before)stats->io_ms+=after-before;}}
+            {uint64_t before=stats?mtp_clock(c):0;
+            e=mtp_read_io(c,c->rx,sizeof(c->rx),&got,ms);
+            if(stats){uint64_t after=mtp_clock(c);++stats->read_calls;stats->read_bytes+=got;if(after>=before)stats->io_ms+=after-before;}}
             if(e) return e;
             if(!remaining(c,start)) return MTP_TIMEOUT;
             if(got>sizeof(c->rx)) return MTP_PROTOCOL;
@@ -186,15 +201,15 @@ static int transaction_ex(mtp_client *c,uint16_t op,const uint32_t *params,size_
     c->last_tid=c->next_tid++; c->last_op=op; c->response=0; c->response_param_count=0;
     put32(cmd,(uint32_t)(12+np*4)); put16(cmd+4,1); put16(cmd+6,op); put32(cmd+8,c->last_tid);
     for(i=0;i<np;++i) put32(cmd+12+i*4,params[i]);
-    start=c->io.now_ms(c->io.user);
-    e=c->io.write(c->io.user,cmd,12+np*4,&sent,c->timeout_ms);
+    start=mtp_clock(c);
+    e=mtp_write_io(c,cmd,12+np*4,&sent,c->timeout_ms);
     if(!e && sent!=12+np*4) e=MTP_IO;
     if(e) goto fail;
     if(outgoing) {
         uint8_t packet[1024];uint32_t ms=remaining(c,start);if(!ms){e=MTP_TIMEOUT;goto fail;}if((op!=0x9804 && op!=0x100c) || outgoing_size>sizeof(packet)-12){e=MTP_STATE;goto fail;}
         put32(packet,(uint32_t)(12+outgoing_size));put16(packet+4,2);put16(packet+6,op);put32(packet+8,c->last_tid);memcpy(packet+12,outgoing,outgoing_size);
-        sent=0;e=c->io.write(c->io.user,packet,12+outgoing_size,&sent,ms);if(!e && sent!=12+outgoing_size)e=MTP_IO;if(e)goto fail;
-        if(c->out_max_packet && (12+outgoing_size)%c->out_max_packet==0){sent=0;e=c->io.write(c->io.user,packet,0,&sent,remaining(c,start));if(!e && sent)e=MTP_IO;if(e)goto fail;}
+        sent=0;e=mtp_write_io(c,packet,12+outgoing_size,&sent,ms);if(!e && sent!=12+outgoing_size)e=MTP_IO;if(e)goto fail;
+        if(c->out_max_packet && (12+outgoing_size)%c->out_max_packet==0){sent=0;e=mtp_write_io(c,packet,0,&sent,remaining(c,start));if(!e && sent)e=MTP_IO;if(e)goto fail;}
     }
     e=container(c,start,0,&type,&code,&p,&size); if(e) goto fail;
     had_data=type==2;
@@ -295,7 +310,44 @@ int mtp_get_partial(mtp_client *c,uint32_t id,uint64_t offset,size_t length,int 
     free(p); return e;
 }
 
-int mtp_get_object_stream(mtp_client *c,uint32_t id,uint64_t size,uint8_t *buffer,size_t capacity,mtp_download_consume consume,mtp_download_progress progress,void *user,mtp_download_stats *stats) {
+int mtp_get_partial_buffered(mtp_client *c,uint32_t id,uint64_t offset,size_t length,int extended,uint8_t *out,size_t *got) {
+    uint8_t command[28],header[12],params[20];size_t command_size=extended?28:24,sent=0,payload=0,done=0,n,i;uint32_t wire_size;uint16_t type,code;uint64_t start;unsigned zeros=0;int rc,had_data=0;
+    if(!got)return MTP_STATE;*got=0;
+    if(!id || id==MTP_ROOT || !length || length>MTP_PARTIAL_BUFFER_BYTES || !out || !c->session || c->poisoned || !c->io.read || !c->io.write || !c->io.now_ms)return MTP_STATE;
+    if((!extended && (offset>UINT32_MAX || length>UINT32_MAX-offset)) || length>UINT64_MAX-offset || c->next_tid==UINT32_MAX)return MTP_LIMIT;
+    if(c->rx_pos!=c->rx_len){c->poisoned=1;return MTP_PROTOCOL;}
+    c->last_op=extended?0x95c1:0x101b;c->last_tid=c->next_tid++;c->response=0;c->response_param_count=0;c->content_read=1;
+    put32(command,(uint32_t)command_size);put16(command+4,1);put16(command+6,c->last_op);put32(command+8,c->last_tid);put32(command+12,id);put32(command+16,(uint32_t)offset);
+    if(extended){put32(command+20,(uint32_t)(offset>>32));put32(command+24,(uint32_t)length);}else put32(command+20,(uint32_t)length);
+    start=mtp_clock(c);rc=mtp_write_io(c,command,command_size,&sent,c->timeout_ms);if(!rc && sent!=command_size)rc=MTP_IO;if(rc)goto fail;
+    rc=exact(c,header,12,start);if(rc)goto fail;wire_size=u32(header);type=u16(header+4);code=u16(header+6);
+    if(u32(header+8)!=c->last_tid || wire_size<12){rc=MTP_PROTOCOL;goto fail;}
+    if(type==2){
+        had_data=1;
+        if(code!=c->last_op || wire_size-12>length){rc=MTP_PROTOCOL;goto fail;}payload=wire_size-12;
+        while(done<payload){
+            if(c->rx_pos<c->rx_len){n=c->rx_len-c->rx_pos;if(n>payload-done)n=payload-done;memcpy(out+done,c->rx+c->rx_pos,n);c->rx_pos+=n;done+=n;continue;}
+            /* Full packet-aligned reads go directly into the reusable HTTP
+             * buffer. The short tail uses the existing response-aware RX. */
+            n=(payload-done)/MTP_RX_BYTES*MTP_RX_BYTES;
+            if(n){size_t actual=0;uint32_t ms=remaining(c,start);if(!ms || zeros>8){rc=MTP_TIMEOUT;goto fail;}
+                rc=mtp_read_io(c,out+done,n,&actual,ms);if(rc)goto fail;if(actual>n){rc=MTP_PROTOCOL;goto fail;}if(!remaining(c,start)){rc=MTP_TIMEOUT;goto fail;}
+                if(!actual){++zeros;continue;}zeros=0;done+=actual;
+            }else {rc=exact(c,out+done,payload-done,start);if(rc)goto fail;done=payload;}
+        }
+        rc=exact(c,header,12,start);if(rc)goto fail;wire_size=u32(header);type=u16(header+4);code=u16(header+6);
+        if(u32(header+8)!=c->last_tid){rc=MTP_PROTOCOL;goto fail;}
+    }else if(type!=3 || code==0x2001){rc=MTP_PROTOCOL;goto fail;}
+    if(type!=3 || wire_size<12 || wire_size>32 || (wire_size-12)%4 || (code&0xf000)!=0x2000){rc=MTP_PROTOCOL;goto fail;}
+    n=wire_size-12;if(n){rc=exact(c,params,n,start);if(rc)goto fail;}
+    if(c->rx_pos!=c->rx_len){rc=MTP_PROTOCOL;goto fail;}
+    c->response=code;c->response_param_count=n/4;for(i=0;i<n/4;++i)c->response_params[i]=u32(params+i*4);
+    c->content_read=0;if(code!=0x2001)return !had_data && (code==0x201d || code==0x2006)?MTP_UNSUPPORTED:MTP_RESPONSE;
+    if(n!=4 || c->response_params[0]!=payload){rc=MTP_PROTOCOL;goto fail;}*got=payload;return 0;
+fail:c->content_read=0;c->poisoned=1;return rc;
+}
+
+int mtp_get_object_stream_buffers(mtp_client *c,uint32_t id,uint64_t size,uint8_t *buffer,size_t capacity,mtp_download_consume consume,mtp_download_progress progress,void *user,mtp_download_stats *stats,mtp_download_acquire acquire) {
     uint8_t command[16],header[12],*reply=NULL;uint64_t offset=0,start;uint32_t length,wanted;size_t sent=0,n=0,got=0;uint16_t type,code;int rc=0;unsigned zeros=0;
     if(stats)memset(stats,0,sizeof(*stats));
     if(!id || id==MTP_ROOT || !buffer || !consume || capacity<MTP_RX_BYTES || capacity>1024u*1024u || capacity%1024 || !c->session || c->poisoned || !c->io.read || !c->io.write || !c->io.now_ms)return MTP_STATE;
@@ -304,7 +356,7 @@ int mtp_get_object_stream(mtp_client *c,uint32_t id,uint64_t size,uint8_t *buffe
     if(progress && progress(user,0,size))return MTP_CANCELLED;
     c->last_op=0x1009;c->last_tid=c->next_tid++;c->response=0;c->response_param_count=0;c->content_read=1;
     put32(command,16);put16(command+4,1);put16(command+6,0x1009);put32(command+8,c->last_tid);put32(command+12,id);
-    start=c->io.now_ms(c->io.user);rc=c->io.write(c->io.user,command,sizeof(command),&sent,c->timeout_ms);if(!rc && sent!=sizeof(command))rc=MTP_IO;if(rc)goto fail;
+    start=mtp_clock(c);rc=mtp_write_io(c,command,sizeof(command),&sent,c->timeout_ms);if(!rc && sent!=sizeof(command))rc=MTP_IO;if(rc)goto fail;
     rc=exact_profile(c,header,sizeof(header),start,stats);if(rc)goto fail;
     length=u32(header);type=u16(header+4);code=u16(header+6);
     if(u32(header+8)!=c->last_tid){rc=MTP_PROTOCOL;goto fail;}
@@ -318,13 +370,14 @@ int mtp_get_object_stream(mtp_client *c,uint32_t id,uint64_t size,uint8_t *buffe
     if(type!=2 || code!=0x1009 || length!=wanted){rc=MTP_PROTOCOL;goto fail;}
     while(offset<size){
         if(offset && progress && progress(user,offset,size)){rc=MTP_CANCELLED;goto fail;}
+        if(acquire){rc=acquire(user,&buffer);if(rc)goto fail;if(!buffer){rc=MTP_STATE;goto fail;}}
         if(c->rx_pos<c->rx_len){
             n=c->rx_len-c->rx_pos;if(n>size-offset)n=(size_t)(size-offset);if(n>capacity)n=capacity;
             memcpy(buffer,c->rx+c->rx_pos,n);c->rx_pos+=n;
         }else{
-            uint64_t before,after;c->rx_pos=c->rx_len=0;start=c->io.now_ms(c->io.user);
+            uint64_t before,after;c->rx_pos=c->rx_len=0;start=mtp_clock(c);
             do{uint32_t ms=remaining(c,start);if(!ms || zeros>8){rc=MTP_TIMEOUT;goto fail;}
-                got=0;before=c->io.now_ms(c->io.user);rc=c->io.read(c->io.user,buffer,capacity,&got,ms);after=c->io.now_ms(c->io.user);
+                got=0;before=mtp_clock(c);rc=mtp_read_io(c,buffer,capacity,&got,ms);after=mtp_clock(c);
                 if(stats){++stats->read_calls;stats->read_bytes+=got;if(after>=before)stats->io_ms+=after-before;}
                 if(rc)goto fail;if(got>capacity){rc=MTP_PROTOCOL;goto fail;}if(!remaining(c,start)){rc=MTP_TIMEOUT;goto fail;}
                 if(!got)++zeros;
@@ -334,7 +387,7 @@ int mtp_get_object_stream(mtp_client *c,uint32_t id,uint64_t size,uint8_t *buffe
         }
         rc=consume(user,buffer,n);if(rc)goto fail;offset+=n;
     }
-    start=c->io.now_ms(c->io.user);rc=container(c,start,1,&type,&code,&reply,&n);if(rc)goto fail;
+    start=mtp_clock(c);rc=container(c,start,1,&type,&code,&reply,&n);if(rc)goto fail;
     if(type!=3 || n || c->rx_pos!=c->rx_len){rc=MTP_PROTOCOL;goto fail;}
     c->response=code;c->content_read=0;free(reply);
     if(code!=0x2001)return MTP_RESPONSE;
@@ -343,6 +396,9 @@ fail:
     free(reply);c->poisoned=1;c->content_read=0;return rc;
 }
 
+int mtp_get_object_stream(mtp_client *c,uint32_t id,uint64_t size,uint8_t *buffer,size_t capacity,mtp_download_consume consume,mtp_download_progress progress,void *user,mtp_download_stats *stats){
+    return mtp_get_object_stream_buffers(c,id,size,buffer,capacity,consume,progress,user,stats,NULL);
+}
 
 int mtp_delete_object(mtp_client *c,uint32_t id) {
     uint32_t params[2]={id,0};uint8_t *p;size_t n;int e;
@@ -386,7 +442,7 @@ int mtp_send_object(mtp_client *c,uint64_t size,mtp_upload_read source,mtp_uploa
     packet=malloc(MTP_COPY_CHUNK);if(!packet){c->poisoned=1;return MTP_MEMORY;}
     c->last_op=0x100d;c->last_tid=c->next_tid++;c->response=0;c->response_param_count=0;c->content_read=1;
     put32(cmd,12);put16(cmd+4,1);put16(cmd+6,0x100d);put32(cmd+8,c->last_tid);
-    start=c->io.now_ms(c->io.user);sent=0;rc=c->io.write(c->io.user,cmd,12,&sent,c->timeout_ms);if(!rc && sent!=12)rc=MTP_IO;if(!rc && !remaining(c,start))rc=MTP_TIMEOUT;if(rc)goto fail;
+    start=mtp_clock(c);sent=0;rc=mtp_write_io(c,cmd,12,&sent,c->timeout_ms);if(!rc && sent!=12)rc=MTP_IO;if(!rc && !remaining(c,start))rc=MTP_TIMEOUT;if(rc)goto fail;
     put32(packet,size>MTP_UPLOAD_STANDARD_MAX_SIZE?UINT32_MAX:(uint32_t)(size+12));put16(packet+4,2);put16(packet+6,0x100d);put32(packet+8,c->last_tid);
     do{
         if(progress && progress(user,offset,size)){rc=MTP_CANCELLED;goto fail;}
@@ -394,16 +450,16 @@ int mtp_send_object(mtp_client *c,uint64_t size,mtp_upload_read source,mtp_uploa
 
         if(offset+chunk<size)chunk=(chunk+header)/c->out_max_packet*c->out_max_packet-header;
         if(chunk){rc=source(user,packet+header,chunk);if(rc)goto fail;}
-        start=c->io.now_ms(c->io.user);sent=0;rc=c->io.write(c->io.user,packet,chunk+header,&sent,c->timeout_ms);
+        start=mtp_clock(c);sent=0;rc=mtp_write_io(c,packet,chunk+header,&sent,c->timeout_ms);
         if(!rc && sent!=chunk+header)rc=MTP_IO;if(!rc && !remaining(c,start))rc=MTP_TIMEOUT;if(rc)goto fail;
         offset+=chunk;header=0;
     }while(offset<size);
-    if((size+12)%c->out_max_packet==0){sent=0;start=c->io.now_ms(c->io.user);rc=c->io.write(c->io.user,packet,0,&sent,c->timeout_ms);if(!rc && sent)rc=MTP_IO;if(rc)goto fail;}
+    if((size+12)%c->out_max_packet==0){sent=0;start=mtp_clock(c);rc=mtp_write_io(c,packet,0,&sent,c->timeout_ms);if(!rc && sent)rc=MTP_IO;if(rc)goto fail;}
     if(progress && progress(user,size,size)){rc=MTP_CANCELLED;goto fail;}
 
 
     if(size>MTP_UPLOAD_STANDARD_MAX_SIZE && c->timeout_ms<30000)c->timeout_ms=30000;
-    start=c->io.now_ms(c->io.user);rc=container(c,start,1,&type,&code,&reply,&n);if(rc)goto fail;
+    start=mtp_clock(c);rc=container(c,start,1,&type,&code,&reply,&n);if(rc)goto fail;
     if(c->rx_pos!=c->rx_len || type!=3 || n){rc=MTP_PROTOCOL;goto fail;}
     c->response=code;if(code!=0x2001)rc=code==0x200c?MTP_NO_SPACE:MTP_RESPONSE;
     c->timeout_ms=saved_timeout;c->content_read=0;free(reply);free(packet);return rc;

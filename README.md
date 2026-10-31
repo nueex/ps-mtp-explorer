@@ -64,7 +64,7 @@ PS MTP Explorer uses standard USB data transfers and is electrically safe under 
 
 ### Install and open
 
-Download **[PS-MTP-Explorer-1.01.pkg](https://github.com/nueex/ps-mtp-explorer/releases/download/v1.01/PS-MTP-Explorer-1.01.pkg)** and install it using GoldHEN's package installer. Version **1.01** updates the existing `NUEX00001` app; its PS4 `APP_VER` and `VERSION` metadata are **01.01**. The previous [1.00 release](https://github.com/nueex/ps-mtp-explorer/releases/tag/v1.00) remains available.
+Download **[PS-MTP-Explorer-2.0.0.pkg](https://github.com/nueex/ps-mtp-explorer/releases/download/v2.0.0/PS-MTP-Explorer-2.0.0.pkg)** and install it using GoldHEN's package installer. Close PS MTP Explorer first if an earlier version is open. Version **2.0.0** updates the existing `NUEX00001` app; its PS4 `APP_VER` and `VERSION` metadata are **02.00**. Earlier [1.01](https://github.com/nueex/ps-mtp-explorer/releases/tag/v1.01) and [1.00](https://github.com/nueex/ps-mtp-explorer/releases/tag/v1.00) releases remain available.
 
 Then:
 

@@ -21,6 +21,8 @@
 #define MTP_ROOT UINT32_C(0xffffffff)
 #define MTP_COPY_CHUNK 65536u
 #define MTP_STREAM_CHUNK (256u*1024u)
+#define MTP_PARTIAL_BASE_BYTES (256u*1024u)
+#define MTP_PARTIAL_BUFFER_BYTES (1024u*1024u)
 
 
 
@@ -53,6 +55,12 @@ typedef struct {
     uint16_t out_max_packet;
     int session, poisoned,content_read,session_cleanup_required,session_recovered;
     int background_io;int32_t background_native_error;
+    /* Optional worker-owned lifecycle gate. Never polls controller/UI state. */
+    void *control_user;
+    int (*io_checkpoint)(void *);
+    uint64_t (*paused_ms)(void *);
+    void (*io_owner)(void *,int); /* 1=handoff pending, 2=consumer owns I/O, 0=restore */
+    int (*resume_check)(void *); /* transport.user; no MTP commands mid-transaction */
 } mtp_client;
 
 typedef struct {
@@ -95,12 +103,21 @@ int mtp_get_object_info(mtp_client *, uint32_t, mtp_object_info *);
 int mtp_delete_object(mtp_client *,uint32_t);
 int mtp_get_object_size(mtp_client *,uint32_t,uint64_t *);
 int mtp_get_partial(mtp_client *,uint32_t,uint64_t,size_t,int extended,uint8_t *,size_t *);
+/* Optional bounded large partial read into caller-owned storage. Existing
+ * readers keep their 64-KiB path. Never retries internally. MTP_UNSUPPORTED
+ * means a clean parameter rejection before a data phase; no bytes consumed. */
+int mtp_get_partial_buffered(mtp_client *,uint32_t,uint64_t,size_t,int extended,uint8_t *,size_t *);
 typedef int (*mtp_download_consume)(void *,const uint8_t *,size_t);
 typedef int (*mtp_download_progress)(void *,uint64_t,uint64_t);
+/* Reserve a writable payload buffer of the stream's configured capacity.
+ * It remains borrowed until the consumer releases it. NULL preserves serial
+ * buffering. An executor must drain its consumers before returning. */
+typedef int (*mtp_download_acquire)(void *,uint8_t **);
 typedef struct {uint64_t read_calls,read_bytes,io_ms;} mtp_download_stats;
 
 
 int mtp_get_object_stream(mtp_client *,uint32_t,uint64_t,uint8_t *,size_t,mtp_download_consume,mtp_download_progress,void *,mtp_download_stats *);
+int mtp_get_object_stream_buffers(mtp_client *,uint32_t,uint64_t,uint8_t *,size_t,mtp_download_consume,mtp_download_progress,void *,mtp_download_stats *,mtp_download_acquire);
 int mtp_rename_object(mtp_client *,uint32_t,uint16_t,const char *);
 
 

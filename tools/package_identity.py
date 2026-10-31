@@ -9,6 +9,17 @@
 """Validate install identifiers before packaging and after independent extraction."""
 import re
 
+# PARAM.SFO ATTRIBUTE bit 1 selects Cross for this title's common dialogs.
+# Bit 5 delegates to regional/system controls and would conflict with this
+# application's existing Cross-confirm / Circle-back interface.
+COMMON_DIALOG_ATTRIBUTE = 0x2
+
+def validate_dialog_controls(sfo):
+    attribute = sfo.get('ATTRIBUTE')
+    if type(attribute) is not int or not 0 <= attribute <= 0xffffffff or attribute & 0x22 != COMMON_DIALOG_ATTRIBUTE:
+        raise ValueError('PARAM.SFO must select Cross-confirm common dialogs (ATTRIBUTE bit 1 set, bit 5 clear)')
+    return {'cross_confirms': True, 'circle_cancels': True, 'system_assignment_override': False}
+
 def validate_identity(title_id, content_id):
     if not re.fullmatch(r'[A-Z]{4}[0-9]{5}', title_id):
         raise ValueError('TITLE_ID must contain four uppercase letters followed by five digits')

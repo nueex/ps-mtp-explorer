@@ -31,5 +31,6 @@ void ui_text(int,int,int,int,const char *,uint32_t);
 void ui_center(int,int,int,int,const char *,uint32_t);
 void ui_shadow(int,int,int,int,int);
 void ui_backdrop(void);
+void ui_settings_backdrop(void);
 void ui_image(const uint32_t *,unsigned,unsigned,int,int,int,int);
 #endif

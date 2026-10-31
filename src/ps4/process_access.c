@@ -7,11 +7,12 @@
  * WITHOUT ANY WARRANTY; see LICENSE.
  * Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
  */
-
-
-
-
+/* Process-local filesystem access through the existing HEN kernel gate.
+ * Apply the pinned libjbc credentials once, before application workers start.
+ * Preserve Unix ownership while enabling the Sony access fields for fstatfs.
+ * This affects only this process; no global patches, mounts or chmods. */
 #include "process_access.h"
+#include "lifecycle.h"
 #include <stdint.h>
 #include <string.h>
 #include <inttypes.h>
@@ -23,6 +24,10 @@
 #endif
 #include "../../third_party/libjbc/libjbc.h"
 typedef char access_credential_layout[(sizeof(jbc_cred)==80 && offsetof(jbc_cred,prison)==24 && offsetof(jbc_cred,sceProcType)==56)?1:-1];
+#include "psmtp/cleanup_log.h"
+
+static struct jbc_context saved_context;
+static int restore_pending;
 static int kernel_pointer(uintptr_t value) {
     return value>=UINT64_C(0xffff800000000000) && value<UINT64_C(0xfffffffffffff000) && !(value&7);
 }
@@ -31,20 +36,27 @@ static int same_identity(const jbc_cred *a,const jbc_cred *b) {
         a->rgid==b->rgid && a->svgid==b->svgid && a->sceProcType==b->sceProcType &&
         a->sonyCred==b->sonyCred && a->sceProcCap==b->sceProcCap;
 }
+static void access_diagnostic(FILE *out,const char *operation){
+    struct jbc_diagnostic d;jbc_get_diagnostic(&d);
+    if(out)fprintf(out,"stage=filesystem-access-detail operation=%s phase=%d native=%d old-prison-refs=%" PRIu32 " target-prison-refs=%" PRIu32 "\n",operation,d.stage,d.native_error,d.old_refs,d.target_refs);
+    psmtp_lifecycle_mark(operation,d.stage);psmtp_lifecycle_mark("access-native-error",d.native_error);
+    psmtp_lifecycle_mark("access-old-prison-refs",(int32_t)d.old_refs);psmtp_lifecycle_mark("access-target-prison-refs",(int32_t)d.target_refs);
+}
 int psmtp_process_access(FILE *out) {
+    if(restore_pending)return -1; /* Never overwrite the original pinned context. */
     OrbisKernelSwVersion version={0};jbc_cred before,global,after;uintptr_t td,proc;int sandbox,rc;
     sandbox=sceKernelIsInSandbox();version.Size=sizeof(version);
     rc=sceKernelGetSystemSwVersion(&version);
     fprintf(out,"stage=filesystem-access begin sandbox=%d uid=%u firmware-rc=%d firmware=%08" PRIx32 "\n",sandbox,(unsigned)getuid(),rc,version.Version);
-
-
-
-
+    /* Firmware is diagnostic information, not an authorization capability.
+     * libjbc resolves global roots from PID 1, without kernel-base offsets.
+     * HEN and live layout/identity checks below decide availability. A failed
+     * version query must not disable an otherwise usable runtime. */
     if(sandbox!=0 && sandbox!=1) {
         fputs("stage=filesystem-access unavailable reason=sandbox-query changed=0\n",out);return 1;
     }
-
-
+    /* Read-only HEN syscall-11 probe first. libjbc validates the returned
+     * thread pointer. Check the process layout against our real PID as well. */
     td=jbc_krw_get_td();
     if(!kernel_pointer(td)) {fputs("stage=filesystem-access unavailable reason=kernel-gate changed=0\n",out);return 1;}
     proc=jbc_krw_read64(td+8,KERNEL_HEAP);
@@ -72,7 +84,24 @@ int psmtp_process_access(FILE *out) {
     global.uid=before.uid;global.ruid=before.ruid;global.svuid=before.svuid;
     global.rgid=before.rgid;global.svgid=before.svgid;
     fputs("stage=filesystem-access apply method=libjbc scope=current-process profile=owner-and-capacity uid-preserved=1\n",out);fflush(out);
-    rc=jbc_set_cred(&global);
+    /* Pin original vnodes/prison before jbc_set_cred releases their ownership.
+     * Keep the snapshot even when applying credentials only partly succeeds. */
+    psmtp_lifecycle_mark("context-snapshot-enter",0);
+    rc=jbc_context_save(&saved_context);psmtp_lifecycle_mark("context-snapshot-returned",rc);access_diagnostic(out,"context-snapshot-detail");
+    if(rc){
+        /* Keep the existing access profile usable when a same-UID credential
+         * copy is unsupported. Never replace it with a raw, unowned jail pin.
+         * A changed/unknown context is still a hard startup failure. */
+        memset(&after,0,sizeof(after));
+        if(rc!=-2 || jbc_get_cred(&after) || !same_identity(&before,&after) ||
+           before.prison!=after.prison || before.cdir!=after.cdir || before.rdir!=after.rdir || before.jdir!=after.jdir){
+            fputs("stage=filesystem-access unavailable reason=context-pin changed=unverified\n",out);return 1;
+        }
+        fputs("stage=filesystem-access restore-unavailable=1 owner=kernel-process-reaper orphan-prison-pin=0\n",out);
+        psmtp_lifecycle_mark("context-restore-unavailable-reaper-only",rc);
+    }
+    else restore_pending=1;
+    rc=jbc_set_cred(&global);access_diagnostic(out,"context-apply-detail");
     memset(&after,0,sizeof(after));
     if(rc || jbc_get_cred(&after) || !same_identity(&global,&after) ||
        after.prison!=global.prison || after.rdir!=global.rdir || after.cdir!=global.cdir ||
@@ -81,4 +110,15 @@ int psmtp_process_access(FILE *out) {
     }
     fprintf(out,"stage=filesystem-access complete verified=1 sandbox=0 uid=%u profile=owner-and-capacity uid-preserved=1\n",(unsigned)getuid());
     return 0;
+}
+
+int psmtp_process_access_restore(FILE *out) {
+    int rc;if(!restore_pending){
+        if(out)fputs("stage=filesystem-access-release method=kernel-process-reaper saved-roots=0 saved-prison-pins=0\n",out);
+        psmtp_lifecycle_mark("filesystem-reaper-handoff-no-saved-refs",0);return 0;
+    }
+    rc=jbc_context_restore(&saved_context);
+    if(!saved_context.held)restore_pending=0;
+    if(out)fprintf(out,"stage=filesystem-access-restore status=%d verified=%d pins-retained=%d\n",rc,!rc,restore_pending);
+    return rc;
 }

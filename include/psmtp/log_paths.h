@@ -12,4 +12,5 @@
 #define PSMTP_LOG_DIRECTORY "/data/psmtp"
 #define PSMTP_SCAN_LOG_PATH PSMTP_LOG_DIRECTORY "/psmtp-scan.log"
 #define PSMTP_DIAGNOSTIC_LOG_PATH PSMTP_LOG_DIRECTORY "/psmtp-diag.log"
+#define PSMTP_SHUTDOWN_LOG_PATH PSMTP_LOG_DIRECTORY "/psmtp-shutdown.log"
 #endif

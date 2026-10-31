@@ -7,11 +7,11 @@
 # Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
 
 cmake_minimum_required(VERSION 3.16)
-project(ps_mtp_explorer VERSION 1.01 LANGUAGES C)
+project(ps_mtp_explorer VERSION 2.0.0 LANGUAGES C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
-add_library(psmtp src/pkg.c src/transfer_meter.c src/keyboard.c src/metadata.c src/name.c src/device_sound.c src/usb_label.c src/device_watch.c src/locations.c src/ui_format.c src/copy_plan.c src/copy.c src/sha256.c src/mtp.c src/usb_select.c src/navigator.c src/browser.c src/diagnostic.c src/diag_log.c src/usb_module.c)
+add_library(psmtp src/update.c src/http_range.c src/install_error.c src/shutdown.c src/sparse_verify.c src/pkg.c src/transfer_meter.c src/keyboard.c src/metadata.c src/name.c src/device_sound.c src/usb_label.c src/device_watch.c src/locations.c src/ui_format.c src/copy_plan.c src/copy.c src/sha256.c src/mtp.c src/usb_select.c src/navigator.c src/browser.c src/diagnostic.c src/diag_log.c src/usb_module.c)
 target_include_directories(psmtp PUBLIC include)
 if(DEFINED ENV{OO_PS4_TOOLCHAIN})
   set(_default_sdk "$ENV{OO_PS4_TOOLCHAIN}")

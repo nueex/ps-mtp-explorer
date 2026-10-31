@@ -7,10 +7,10 @@
  * WITHOUT ANY WARRANTY; see LICENSE.
  * Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
  */
-
-
-
-
+/* Private, exclusively created destination namespace. No hard-link syscalls.
+ * Rename is confined to this transfer's new 0700 directory, never the shared staging root.
+ * After streaming verification and publication, completed output is readable.
+ * Another privileged process must not modify this namespace during transfer. */
 #define _GNU_SOURCE
 #include "copy_file.h"
 #include "storage_space.h"
@@ -86,6 +86,8 @@ static int chain(psmtp_copy_file *f) {
     e=parent_check(f); if(e) return e;
     return f->owned_directory?identity(f,f->directory_path,f->dir_dev,f->dir_ino,1):0;
 }
+static int copy_pause_flush(void *);
+static int copy_pause_validate(void *);
 static int begin(void *v,const mtp_copy_source *s) {
     psmtp_copy_file *f=v; unsigned attempt; uint64_t stamp=(uint64_t)time(NULL); int rc,e; psmtp_native_stat st;
     e=psmtp_space_require("/",PSMTP_COPY_DIRECTORY,s->size,f->log);if(e)return e;
@@ -136,6 +138,7 @@ static int begin(void *v,const mtp_copy_source *s) {
         f->owned=1; e=status(f,f->file,NULL,&st); if(e) return e;
         f->file_dev=st.st_dev; f->file_ino=st.st_ino;
         e=identity(f,f->temporary,f->file_dev,f->file_ino,0); if(e) return e;
+        psmtp_work_bind_io(&f->pause_scope,copy_pause_flush,copy_pause_validate,f);
         fprintf(f->log,"stage=copy-fs-created target=%s exclusive-directory=1 exclusive-file=1\n",f->path); return 0;
     }
     return failure(f,"name-limit",-1);
@@ -146,26 +149,51 @@ static int put(void *v,const uint8_t *p,size_t n,size_t *actual) {
     *actual=rc<0?0:(size_t)rc; return rc<0?failure(f,"write",rc):0;
 }
 static int sync_file(void *v) { psmtp_copy_file *f=v; int rc=fsync(f->file); return rc?failure(f,"sync-file",rc):0; }
+static int copy_pause_flush(void *v){psmtp_copy_file *f=v;return f->file>=0?sync_file(v):0;}
 static int rewind_file(void *v) { psmtp_copy_file *f=v; int64_t rc=lseek(f->file,0,SEEK_SET); return rc?failure(f,"rewind",rc):0; }
 static int get(void *v,uint8_t *p,size_t n,size_t *actual) {
     psmtp_copy_file *f=v; ssize_t rc;
     do { rc=read(f->file,p,n); } while(rc<0 && errno==EINTR);
     *actual=rc<0?0:(size_t)rc; return rc<0?failure(f,"read-back",rc):0;
 }
+static int reopen_read(void *v) {
+    psmtp_copy_file *f=v;psmtp_native_stat st;int fd=f->file,e,rc;
+    f->file=-1;rc=close(fd);if(rc)return failure(f,"verify-close-writer",rc);
+    e=chain(f);if(e)return e;
+    f->file=open(f->temporary,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(f->file<0)return failure(f,"verify-reopen",-1);
+    e=status(f,f->file,NULL,&st);if(e)return e;
+    if(!S_ISREG(st.st_mode) || (uint64_t)st.st_dev!=f->file_dev || (uint64_t)st.st_ino!=f->file_ino)return MTP_VERIFY;
+    return 0;
+}
+static int verify_size(void *v,uint64_t *size) {
+    psmtp_copy_file *f=v;psmtp_native_stat st;int rc=status(f,f->file,NULL,&st);if(rc)return rc;
+    if(!S_ISREG(st.st_mode) || (uint64_t)st.st_dev!=f->file_dev || (uint64_t)st.st_ino!=f->file_ino || st.st_size<0)return MTP_VERIFY;
+    *size=(uint64_t)st.st_size;return 0;
+}
+static int read_at(void *v,uint64_t at,uint8_t *data,size_t n,size_t *got) {
+    psmtp_copy_file *f=v;int64_t result;*got=0;if(at>INT64_MAX)return MTP_LIMIT;
+    do{result=lseek(f->file,(int64_t)at,SEEK_SET);}while(result<0 && errno==EINTR);
+    if(result<0 || (uint64_t)result!=at)return failure(f,"verify-seek",result);
+    return get(v,data,n,got);
+}
 static int space(void *v,uint64_t *available) {
     psmtp_copy_file *f=v;psmtp_native_stat st;int e;*available=0;
     int fds[5]={f->data,f->base,f->root,f->parent,f->directory};
     uint64_t devs[5]={f->data_dev,f->base_dev,f->root_dev,f->parent_dev,f->dir_dev};
     uint64_t inos[5]={f->data_ino,f->base_ino,f->root_ino,f->parent_ino,f->dir_ino};size_t i;
-
-
+    /* Keep and inspect the original directory descriptors in the hot path.
+     * chain() still validates the namespace before publication and cleanup. */
     for(i=0;i<5;++i)if(fds[i]>=0){e=status(f,fds[i],NULL,&st);if(e)return e;if(!S_ISDIR(st.st_mode) || (uint64_t)st.st_dev!=devs[i] || (uint64_t)st.st_ino!=inos[i])return MTP_VERIFY;
         if(i==4 && (f->directory_readable?(st.st_mode&0777)!=0755:(st.st_mode&0077)!=0))return MTP_VERIFY;}
     e=status(f,f->file,NULL,&st);if(e)return e;
     if(!S_ISREG(st.st_mode) || (uint64_t)st.st_dev!=f->file_dev || (uint64_t)st.st_ino!=f->file_ino || st.st_size<0 || (uint64_t)st.st_size>f->expected_size)return MTP_VERIFY;
     return MTP_COPY_SPACE_STREAMING;
 }
-
+static int copy_pause_validate(void *v){psmtp_copy_file *f=v;uint64_t available;int rc=chain(f);if(!rc && f->file>=0){rc=space(f,&available);if(rc==MTP_COPY_SPACE_STREAMING)rc=0;
+    if(!rc)rc=identity(f,f->published?f->path:f->temporary,f->file_dev,f->file_ino,0);}
+    return rc?MTP_DISCONNECTED:0;
+}
+/* Descriptor-only permission changes: never chmod a shared root or old copy. */
 static int readable(psmtp_copy_file *f,int fd,unsigned mode,int directory) {
     psmtp_native_stat st; int rc=fchmod(fd,mode),e;
     if(rc) return failure(f,directory?"share-directory":"share-file",rc);
@@ -186,12 +214,12 @@ static int publish(void *v,int *published) {
     if(st.st_size<0 || (uint64_t)st.st_size!=f->expected_size)return MTP_VERIFY;
     e=chain(f); if(e) return e;
     e=identity(f,f->temporary,f->file_dev,f->file_ino,0); if(e) return e;
-
-
+    /* Defense against unexpected writers in the exclusively reserved namespace.
+     * Safety relies on private ownership, not this absence check alone. */
     errno=0; target=open(f->path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
     if(target>=0) { e=failure(f,"unexpected-target",target); (void)close(target); return e; }
     if(errno!=ENOENT) return failure(f,"target-check",target);
-
+    /* The parent is still 0700, so unfinished content stays inaccessible. */
     e=readable(f,f->file,0644,0); if(e) return e;
     rc=fsync(f->file); if(rc) return failure(f,"sync-file-permissions",rc);
     rc=close(f->file); f->file=-1; if(rc) return failure(f,"close-file",rc);
@@ -205,7 +233,8 @@ static int publish(void *v,int *published) {
 }
 static int dispose(void *v) {
     psmtp_copy_file *f=v; int error=0,rc,e;
-    if(f->file>=0) { rc=close(f->file); if(rc) error=failure(f,"close-temp",rc); f->file=-1; }
+    psmtp_work_unbind_io(&f->pause_scope);
+    if(f->file>=0) { if(fsync(f->file))error=failure(f,"sync-temp-cleanup",-1);rc=close(f->file); if(rc) error=failure(f,"close-temp",rc); f->file=-1; }
     if(f->owned) {
         e=chain(f); if(!e) e=identity(f,f->temporary,f->file_dev,f->file_ino,0);
         if(e) error=e;
@@ -215,8 +244,8 @@ static int dispose(void *v) {
         e=chain(f); if(e) error=e;
         else { rc=rmdir(f->directory_path); if(rc) error=failure(f,"remove-empty-directory",rc); else f->owned_directory=0; }
     }
-
-
+    /* Open read/search access only after publication.
+     * Failed/cancelled transfers never reach this step. */
     if(!error && f->published && !f->owned) {
         e=chain(f); if(!e) e=identity(f,f->path,f->file_dev,f->file_ino,0);
         if(!e) e=readable(f,f->directory,0755,1);
@@ -230,7 +259,7 @@ static int dispose(void *v) {
         }
     }
     if(f->root>=0 && f->owned_directory==0) { rc=fsync(f->root); if(rc) error=failure(f,"sync-cleanup",rc); }
-    if(f->directory>=0) { rc=close(f->directory); if(rc) error=failure(f,"close-private-directory",rc); f->directory=-1; }
+    if(f->directory>=0) { rc=fsync(f->directory);if(rc)error=failure(f,"sync-private-cleanup",rc);rc=close(f->directory); if(rc) error=failure(f,"close-private-directory",rc); f->directory=-1; }
     if(f->parent>=0) { rc=fsync(f->parent); if(rc) error=failure(f,"sync-copy-parent",rc); rc=close(f->parent); if(rc) error=failure(f,"close-copy-parent",rc); f->parent=-1; }
     if(f->root>=0) { rc=close(f->root); if(rc) error=failure(f,"close-directory",rc); f->root=-1; }
     if(f->base>=0) { rc=close(f->base); if(rc) error=failure(f,"close-base",rc); f->base=-1; }
@@ -241,7 +270,7 @@ static int dispose(void *v) {
 int psmtp_copy_file_discard(psmtp_copy_file *f){
     int rc,e,root;psmtp_native_stat st;const char *leaf;
     if(!f || !f->owned_directory)return 0;
-
+    /* Never remove a shared directory, old copy, or unrelated child. */
     leaf=strrchr(f->directory_path,'/');
     if(!leaf || strncmp(leaf+1,"psmtp-",6) || strncmp(f->directory_path,PSMTP_COPY_DIRECTORY "/",strlen(PSMTP_COPY_DIRECTORY)+1))return MTP_VERIFY;
     e=chain(f);if(e)return e;
@@ -263,6 +292,7 @@ void psmtp_copy_file_init(psmtp_copy_file *f,FILE *out,mtp_copy_sink *sink) {
     memset(f,0,sizeof(*f)); f->parent=f->file=f->directory=f->root=f->base=f->data=-1; f->log=out;
     sink->user=f; sink->begin=begin; sink->space=space; sink->write=put; sink->sync=sync_file;
     sink->rewind=rewind_file; sink->read=get; sink->publish=publish; sink->dispose=dispose; sink->prepare=NULL;
+    sink->reopen_read=reopen_read;sink->size=verify_size;sink->read_at=read_at;sink->verify_workspace=NULL;
 }
 int psmtp_copy_file_init_at(psmtp_copy_file *f,FILE *out,mtp_copy_sink *sink,const char *parent) {
     size_t n=strlen(parent),base=strlen(PSMTP_COPY_DIRECTORY),i;

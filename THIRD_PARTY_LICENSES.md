@@ -2,7 +2,7 @@
 
 **Original-work migration (2026-10-26):** Original Author: nueex — Copyright (C) 2026 nueex. Only nueex's original work is now offered under GPL-3.0-or-later; see [LICENSING.md](LICENSING.md) and [LICENSE_SCOPE.json](LICENSE_SCOPE.json). Third-party terms remain unchanged. The complete application is not cleared for redistribution: libjbc and excluded third-party artwork/branding still require resolution. See [LICENSING.md](LICENSING.md). Attribution and source availability alone do not establish redistribution permission. The [historical MIT grant](LICENSES/MIT-legacy.txt) remains effective for previously licensed material.
 
-PS MTP Explorer includes third-party components with their own terms. This file does not relicense those components. License texts and corresponding OpenOrbis runtime materials are provided in `PS-MTP-Explorer-1.01-Third-Party.zip` alongside the compiled release. Application source is not included in that archive.
+PS MTP Explorer includes third-party components with their own terms. This file does not relicense those components. License texts and corresponding OpenOrbis runtime materials are provided in `PS-MTP-Explorer-2.0.0-Third-Party.zip` alongside the compiled release. Application source is not included in that archive.
 
 | Component | Attribution and terms |
 | :--- | :--- |
@@ -21,3 +21,29 @@ The compiled integration uses the kernel-access and process-credential portions 
 Additional upstream contributor: **LightningMods**, whose merged [PR #1](https://github.com/sleirsgoevy/ps4-libjbc/pull/1) adds Sony credential/capability handling used by this integration. Permission review must cover the relevant contributions of sleirsgoevy, LightningMods and bucanero; this credit is not a license grant. The [artwork inventory](LICENSING_ASSETS.json) identifies supplied assets and their embedded/documentation copies needing clearance. These complete-distribution issues do not prevent nueex from separately licensing original work nueex owns under GPL-3.0-or-later.
 
 OpenOrbis packaging/conversion tools and LLVM are build-time tools; their executables are not shipped in the application distribution. No proprietary Sony SDK or console firmware module is bundled.
+
+## stb_image pin for T12-A1 (2026-10-29)
+
+**Upstream branch: `dev` (development snapshot, not a numbered release).**
+The compiled image decoder is now the repository-owned
+`third_party/stb/stb_image.h`; `stb_truetype` still comes from the SDK.
+
+- Upstream: https://github.com/nothings/stb
+- Commit: `2838bd5823c095dd1d5b5d8fac0b4fc8aa72a36d`
+- Exact source: https://raw.githubusercontent.com/nothings/stb/2838bd5823c095dd1d5b5d8fac0b4fc8aa72a36d/stb_image.h
+- Header version string: `stb_image - v2.30`; the SHA identifies the later fixes.
+- SHA-256: `06d445a53ee6172fa41ac382dfed9648a7719943dbe76fc18ae11ec161898416`
+- Both original MIT/public-domain license alternatives remain intact in the
+  exact upstream header. No local edits or line-ending conversions were made.
+- Previous decoder: SDK v2.25, SHA-256
+  `281c4f378083e1f195cd06fb98f1ec7eb9749353eb19c915f17c2af46abbafee`.
+  It exactly matches the header in OpenOrbis commit
+  `b458dfd9d2f5c40aa249b127c9b9b4488afdc686`; no local patches were found.
+- `src/metadata.c` preserves static linkage, C99, JPEG/PNG-only selection,
+  SIMD/stdio/HDR/linear exclusions and the existing 8192 dimension limit.
+  The development header accidentally excludes `stbi__mad4sizes_valid` for
+  this combination. The integration supplies that exact upstream helper,
+  using the header's checked arithmetic, without editing the header or
+  enabling extra decoders. Remove the integration helper when upstream fixes
+  its definition guard.
+

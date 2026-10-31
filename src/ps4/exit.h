@@ -10,6 +10,9 @@
 #ifndef PSMTP_PS4_EXIT_H
 #define PSMTP_PS4_EXIT_H
 #include <stdio.h>
-
+/* Register once at startup; called on every exit route, including libc _exit. */
+void psmtp_ps4_exit_set_cleanup(FILE *(*cleanup)(void));
+int psmtp_ps4_exit_pending(void);
+/* Never falls back to the libkernel _exit syscall that trapped on this PS4. */
 __attribute__((noreturn)) void psmtp_ps4_exit(int status,FILE *log);
 #endif

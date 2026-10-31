@@ -18,6 +18,7 @@ typedef struct {
     uint64_t bytes;
     int folder,verified,incomplete;
     char modified[32];
+    int64_t modified_seconds,modified_nanoseconds;
 } psmtp_local_entry;
 typedef struct {
     psmtp_local_entry entries[PSMTP_LOCAL_ITEMS];
@@ -35,6 +36,9 @@ typedef struct {
 } psmtp_folder_store;
 int psmtp_native_directory(const char *,const char *);
 int psmtp_native_status(int,psmtp_native_stat *);
+/* Completed user outputs: independent of the process umask and Unix owner.
+ * USB filesystems may synthesize permissions from mount options. */
+int psmtp_native_output_access(int,int,int,FILE *);
 int psmtp_local_prepare_copies(FILE *);
 unsigned psmtp_local_usb_mask(void);
 unsigned psmtp_local_usb_scan(FILE *);

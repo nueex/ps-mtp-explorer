@@ -53,3 +53,36 @@ No kernel patch, mount/format or global directory permission change is made.
 The old 11.00-only gate was a production compatibility defect. Removing it and
 passing host models do not establish compatibility with every HEN or future
 kernel. See docs/CROSS_FIRMWARE_ROOT_CAUSE.md for evidence and release limits.
+
+Startup-repair r2 (2026-10-27; supersedes the enabled copy design below):
+- The first experimental console log recorded snapshot success followed by
+  elevation failure (-1), stopping browsing before USB initialization. The
+  precise failing internal operation was not recorded by that package.
+- Default builds disable PSMTP_EXPERIMENTAL_CREDENTIAL_SNAPSHOT: no same-UID
+  setuid, copied credential, saved root descriptors, extra raw prison hold,
+  or new atomic C kernel callback is introduced. The established libjbc
+  kernel-copy elevation ABI is used, with operation-level diagnostics.
+- The live process namespace remains owned by its normal process/descriptor
+  references for kernel exit reaping; shutdown explicitly reports this handoff,
+  rather than claiming original-context restoration. The default profile has
+  a separate host test and is not hardware-validated by those models.
+- The disabled snapshot model also tests files that copy credentials at open
+  time. Its original-credential anchor fixes that model, not a proven console
+  root cause. Neither build_ps4.py mode enables the snapshot experiment.
+
+Earlier system-close design (2026-10-27; disabled in default/r2 builds):
+- A raw extra prison reference held only by user cleanup leaks if forced
+  termination bypasses that cleanup. The previous design is reproduced in a
+  host model; this is not a measurement of the console's shutdown fault.
+- Saved root descriptors now retain the original ucred. A same-UID OS credential
+  copy is verified to produce a distinct process ucred before elevation. Kernel
+  f_cred ownership keeps the original prison alive and releases it during
+  descriptor/credential reaping even after a forced close. No extra raw saved
+  prison increment/decrement is performed by context save/release.
+- Same-UID copy unavailability with unchanged verified identity keeps the
+  original elevation behavior and kernel-reaper ownership, explicitly logged
+  as restoration unavailable. Unverified context changes still stop startup.
+- Native setuid syscall 23 only requests the existing UID; original IDs/Sony
+  fields are preserved. Models cover denied cloning, an already-global prison,
+  partial-open/write failures and OS reaping without any application callback.
+- No new kernel vnode offsets, vref/vrele addresses or firmware patches are used.

@@ -9,6 +9,7 @@
  */
 #include "psmtp/usb_module.h"
 #include <inttypes.h>
+#include "psmtp/cleanup_log.h"
 
 int psmtp_usb_module_acquire(psmtp_usb_module *m,const psmtp_usb_module_ops *ops,FILE *out) {
     int32_t rc;

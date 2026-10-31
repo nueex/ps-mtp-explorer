@@ -1,7 +1,7 @@
 # Build PS MTP Explorer
 
 The repository includes the source, libjbc integration, fonts, and artwork
-for version **1.01**, with title ID `NUEX00001` and PS4 SFO version `01.01`.
+for version **2.0.0**, with title ID `NUEX00001` and PS4 SFO version `02.00`.
 External compiler and SDK binaries are installed separately.
 
 ## Requirements

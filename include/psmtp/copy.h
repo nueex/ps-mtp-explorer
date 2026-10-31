@@ -10,6 +10,7 @@
 #ifndef PSMTP_COPY_H
 #define PSMTP_COPY_H
 #include "psmtp/mtp.h"
+#include "psmtp/sparse_verify.h"
 #include <stdio.h>
 typedef struct {
     mtp_object_info info;
@@ -37,10 +38,20 @@ typedef struct {
     int (*publish)(void *,int *published);
     int (*dispose)(void *);
     int (*prepare)(void *,mtp_copy_progress,void *);
+    /* Quick verification: sync precedes close/reopen O_RDONLY; native size
+     * and seek/read callbacks preserve 64-bit offsets. No buffered FILE I/O. */
+    int (*reopen_read)(void *);
+    int (*size)(void *,uint64_t *);
+    int (*read_at)(void *,uint64_t,uint8_t *,size_t,size_t *);
+    psmtp_verify_workspace *verify_workspace;
 } mtp_copy_sink;
 typedef struct { uint8_t digest[32]; int published,cleanup_failed; } mtp_copy_result;
 int mtp_copy_probe(mtp_client *,uint32_t,const mtp_object_info *,mtp_copy_source *,FILE *);
 
 int mtp_copy_run_quick(mtp_client *,const mtp_copy_source *,const mtp_copy_sink *,mtp_copy_progress,void *,mtp_copy_result *,FILE *);
 int mtp_copy_run(mtp_client *,const mtp_copy_source *,const mtp_copy_sink *,mtp_copy_progress,void *,mtp_copy_result *,FILE *);
+/* The optional executor must join every consumer before returning: verification
+ * and disposal borrow the same sink and context. NULL keeps serial execution. */
+typedef int (*mtp_copy_stream_reader)(mtp_client *,uint32_t,uint64_t,uint8_t *,size_t,mtp_download_consume,mtp_download_progress,void *,mtp_download_stats *,FILE *);
+int mtp_copy_run_streamed(mtp_client *,const mtp_copy_source *,const mtp_copy_sink *,mtp_copy_progress,void *,mtp_copy_result *,FILE *,int,mtp_copy_stream_reader);
 #endif

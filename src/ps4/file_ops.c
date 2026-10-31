@@ -7,11 +7,13 @@
  * WITHOUT ANY WARRANTY; see LICENSE.
  * Historical MIT permissions/notices: LICENSES/MIT-legacy.txt.
  */
-
-
+/* Phase 3: bounded clipboard operations. Every created file is exclusive.
+ * This is a single-writer operation, not a whole-tree atomic transaction. */
 #define _GNU_SOURCE
 #include "file_ops.h"
 #include "storage_space.h"
+#include "download.h"
+#include "work_io.h"
 #include "psmtp/sha256.h"
 #include "psmtp/ui_format.h"
 #include "psmtp/name.h"
@@ -161,8 +163,8 @@ int psmtp_op_rename(const psmtp_op_ref *source,mtp_client *client,const char *na
         rc=ops_join(target,parent,name);if(rc)return rc;
         pin=psmtp_native_directory(source->location.root,parent);if(pin<0)return MTP_FILESYSTEM;
         rc=ops_native_check(source->location.root,source->path,&source->native,!source->folder);
-
-
+        /* Reserve the new leaf exclusively. Existing items are never selected
+         * as rename targets. This uses the same single-writer model as copy. */
         if(!rc){if(source->folder){if(mkdir(target,0700))rc=MTP_FILESYSTEM;else {reserved=1;fd=ops_open(source->location.root,target,O_RDONLY|O_DIRECTORY);}}
             else {fd=ops_open(source->location.root,target,O_RDWR|O_CREAT|O_EXCL);if(fd>=0)reserved=1;else rc=MTP_FILESYSTEM;}}
         if(!rc && fd<0)rc=MTP_FILESYSTEM;
@@ -229,7 +231,9 @@ int psmtp_op_target(psmtp_op_plan *p,const psmtp_location *location,const char *
     if(p->source.location.kind!=PSMTP_LOCATION_PHONE && ops_below(p->nodes[0].target,p->source.path)) return MTP_STATE;
     return 0;
 }
-typedef struct {psmtp_op_plan *plan;psmtp_op_node *node;int fd,owned,published,destination_dir,parent_dir;uint64_t expected;} ops_file;
+typedef struct {psmtp_op_plan *plan;psmtp_op_node *node;int fd,owned,published,destination_dir,parent_dir;uint64_t expected;psmtp_work_io_scope pause_scope;} ops_file;
+static int ops_pause_flush(void *);
+static int ops_pause_validate(void *);
 static int ops_destination_check(psmtp_op_plan *p) {const char *stage=NULL;int rc=ops_native_check_detail(p->destination_location.root,p->destination,&p->destination_stat,0,&stage);return rc?ops_failure(p,stage,rc):0;}
 static int ops_owned_remove(const char *root,const char *path,const psmtp_native_stat *st) {int rc=ops_native_check(root,path,st,0);return rc?rc:unlink(path)?MTP_FILESYSTEM:0;}
 static int ops_file_begin(void *user,const mtp_copy_source *source) {
@@ -241,13 +245,13 @@ static int ops_file_begin(void *user,const mtp_copy_source *source) {
     if(f->node->parent!=SIZE_MAX){f->parent_dir=psmtp_native_directory(f->plan->destination_location.root,f->plan->nodes[f->node->parent].target);if(f->parent_dir<0)return ops_failure(f->plan,"parent-pin",MTP_FILESYSTEM);}
     f->expected=source->size;f->fd=ops_open_detail(f->plan->destination_location.root,f->node->target,O_RDWR|O_CREAT|O_EXCL,&stage);
     if(f->fd<0) return ops_failure(f->plan,stage,MTP_FILESYSTEM);f->owned=1;
-    rc=psmtp_native_status(f->fd,&f->node->destination);return rc?ops_failure(f->plan,"destination-stat",rc):0;
+    rc=psmtp_native_status(f->fd,&f->node->destination);if(!rc)psmtp_work_bind_io(&f->pause_scope,ops_pause_flush,ops_pause_validate,f);return rc?ops_failure(f->plan,"destination-stat",rc):0;
 }
 static int ops_file_space(void *user,uint64_t *available) {
     ops_file *f=user;psmtp_native_stat st;int rc;*available=0;
-
-
-
+    /* These descriptors stay pinned for the file's lifetime. Reopening every
+     * path component per MiB adds syscalls without strengthening the supported
+     * single-writer model. Full path identities are rechecked at publication. */
     rc=psmtp_native_status(f->destination_dir,&st);if(rc)return rc;
     if(!ops_same(&st,&f->plan->destination_stat,0))return MTP_VERIFY;
     if(f->node->parent!=SIZE_MAX){rc=psmtp_native_status(f->parent_dir,&st);if(rc)return rc;if(!ops_same(&st,&f->plan->nodes[f->node->parent].destination,0))return MTP_VERIFY;}
@@ -257,8 +261,31 @@ static int ops_file_space(void *user,uint64_t *available) {
 }
 static int ops_file_write(void *user,const uint8_t *data,size_t n,size_t *actual) {ops_file *f=user;ssize_t k;do {k=write(f->fd,data,n);} while(k<0 && errno==EINTR);*actual=k<0?0:(size_t)k;return k<0?(errno==ENOSPC?MTP_NO_SPACE:MTP_FILESYSTEM):0;}
 static int ops_file_sync(void *user) {return fsync(((ops_file *)user)->fd)?(errno==ENOSPC?MTP_NO_SPACE:MTP_FILESYSTEM):0;}
+static int ops_pause_flush(void *user){ops_file *f=user;return f->fd>=0?ops_file_sync(user):0;}
+static int ops_pause_validate(void *user){ops_file *f=user;uint64_t ignored;int rc=ops_destination_check(f->plan);
+    if(!rc)rc=ops_native_check(f->plan->destination_location.root,f->node->target,&f->node->destination,0);
+    if(!rc && f->fd>=0){rc=ops_file_space(f,&ignored);if(rc==MTP_COPY_SPACE_STREAMING)rc=0;}
+    if(!rc && f->plan->source.location.kind!=PSMTP_LOCATION_PHONE)rc=ops_native_check(f->plan->source.location.root,f->node->path,&f->node->native,1);
+    return rc?MTP_DISCONNECTED:0;
+}
 static int ops_file_rewind(void *user) {return lseek(((ops_file *)user)->fd,0,SEEK_SET)==0?0:MTP_FILESYSTEM;}
 static int ops_file_read(void *user,uint8_t *data,size_t n,size_t *actual) {ops_file *f=user;ssize_t k;do {k=read(f->fd,data,n);} while(k<0 && errno==EINTR);*actual=k<0?0:(size_t)k;return k<0?MTP_FILESYSTEM:0;}
+static int ops_file_reopen_read(void *user) {
+    ops_file *f=user;int fd=f->fd,rc;psmtp_native_stat st;
+    f->fd=-1;if(close(fd))return ops_failure(f->plan,"verify-close-writer",MTP_FILESYSTEM);
+    f->fd=ops_open(f->plan->destination_location.root,f->node->target,O_RDONLY);if(f->fd<0)return ops_failure(f->plan,"verify-reopen",MTP_FILESYSTEM);
+    rc=psmtp_native_status(f->fd,&st);if(!rc && !ops_same(&st,&f->node->destination,0))rc=MTP_VERIFY;
+    return rc;
+}
+static int ops_file_size(void *user,uint64_t *size) {
+    ops_file *f=user;psmtp_native_stat st;int rc=psmtp_native_status(f->fd,&st);if(rc)return rc;
+    if(!S_ISREG(st.st_mode) || !ops_same(&st,&f->node->destination,0) || st.st_size<0)return MTP_VERIFY;*size=(uint64_t)st.st_size;return 0;
+}
+static int ops_file_read_at(void *user,uint64_t at,uint8_t *data,size_t n,size_t *got) {
+    ops_file *f=user;int64_t offset;*got=0;if(at>INT64_MAX)return MTP_LIMIT;
+    do{offset=lseek(f->fd,(int64_t)at,SEEK_SET);}while(offset<0 && errno==EINTR);
+    if(offset<0 || (uint64_t)offset!=at)return MTP_FILESYSTEM;return ops_file_read(user,data,n,got);
+}
 static int ops_sync_parent(const char *root,const char *path) {
     char parent[256],*slash;int fd,rc;strcpy(parent,path);slash=strrchr(parent,'/');if(!slash) return MTP_STATE;
     if(slash==parent) slash[1]=0;else *slash=0;fd=psmtp_native_directory(root,parent);if(fd<0) return MTP_FILESYSTEM;
@@ -267,39 +294,37 @@ static int ops_sync_parent(const char *root,const char *path) {
 static int ops_file_publish(void *user,int *published) {
     ops_file *f=user;psmtp_native_stat st;int rc=ops_destination_check(f->plan);if(rc) return rc;
     rc=ops_native_check(f->plan->destination_location.root,f->node->target,&f->node->destination,0);if(rc) return rc;
-    if(f->plan->destination_location.kind!=PSMTP_LOCATION_USB && fchmod(f->fd,0644)) return MTP_FILESYSTEM;
+    rc=psmtp_native_output_access(f->fd,0,f->plan->destination_location.kind==PSMTP_LOCATION_USB,f->plan->log);
+    if(rc) return ops_failure(f->plan,"output-access",rc);
     if(fsync(f->fd) || psmtp_native_status(f->fd,&st) || !ops_same(&st,&f->node->destination,0) || st.st_size<0 || (uint64_t)st.st_size!=f->expected) return MTP_VERIFY;
     f->node->destination=st;f->published=*published=1;return ops_sync_parent(f->plan->destination_location.root,f->node->target);
 }
 static int ops_file_dispose(void *user) {
-    ops_file *f=user;int rc=0;if(f->fd>=0) {if(close(f->fd)) rc=MTP_FILESYSTEM;f->fd=-1;}
+    ops_file *f=user;int rc=0;if(f->fd>=0) {if(fsync(f->fd))rc=MTP_FILESYSTEM;if(close(f->fd)) rc=MTP_FILESYSTEM;f->fd=-1;}
+    psmtp_work_unbind_io(&f->pause_scope);
     if(f->owned && !f->published) {int e=ops_owned_remove(f->plan->destination_location.root,f->node->target,&f->node->destination);if(e) {rc=e;f->plan->cleanup_failed=1;}}
-    if(f->parent_dir>=0 && f->parent_dir!=f->destination_dir && close(f->parent_dir))rc=MTP_FILESYSTEM;
-    if(f->destination_dir>=0 && close(f->destination_dir))rc=MTP_FILESYSTEM;
+    if(f->parent_dir>=0 && f->parent_dir!=f->destination_dir){if(fsync(f->parent_dir))rc=MTP_FILESYSTEM;if(close(f->parent_dir))rc=MTP_FILESYSTEM;}
+    if(f->destination_dir>=0){if(fsync(f->destination_dir))rc=MTP_FILESYSTEM;if(close(f->destination_dir))rc=MTP_FILESYSTEM;}
     f->parent_dir=f->destination_dir=-1;
     return rc;
 }
-static int ops_hash_native(psmtp_op_plan *p,const char *root,const char *path,const psmtp_native_stat *expected,uint8_t digest[32],mtp_copy_progress progress,void *user,int phase) {
-    int fd=ops_open(root,path,O_RDONLY),rc=0;uint8_t *data;uint64_t offset=0;psmtp_sha256 hash;psmtp_native_stat st;
-    if(fd<0) return MTP_FILESYSTEM;
-    data=malloc(MTP_COPY_CHUNK);if(!data) {close(fd);return MTP_MEMORY;}
-    rc=psmtp_native_status(fd,&st);if(!rc && !ops_same(&st,expected,1)) rc=MTP_VERIFY;psmtp_sha256_init(&hash);
-    while(!rc && offset<(uint64_t)expected->st_size) {
-        size_t n=(size_t)((uint64_t)expected->st_size-offset>MTP_COPY_CHUNK?MTP_COPY_CHUNK:(uint64_t)expected->st_size-offset);ssize_t k;
-        rc=ops_cancel(progress,user,phase,offset,(uint64_t)expected->st_size);if(rc) break;
-        do {k=read(fd,data,n);} while(k<0 && errno==EINTR);if(k<=0 || (size_t)k>n) {rc=MTP_FILESYSTEM;break;}
-        psmtp_sha256_update(&hash,data,(size_t)k);offset+=(uint64_t)k;
-    }
-    if(!rc) {ssize_t k=read(fd,data,1);if(k!=0) rc=MTP_VERIFY;}
-    if(!rc && (psmtp_native_status(fd,&st) || !ops_same(&st,expected,1))) rc=MTP_VERIFY;
-    if(!rc) psmtp_sha256_final(&hash,digest);free(data);if(close(fd)) rc=MTP_FILESYSTEM;
-    if(rc) ops_error(p,"hash",rc);return rc;
+typedef struct {mtp_copy_sink *sink;mtp_copy_progress progress;void *user;uint64_t size;int error;} ops_local_verify;
+static int ops_local_verify_size(void *user,uint64_t *size) {
+    ops_local_verify *io=user;int rc=io->sink->size(io->sink->user,size);if(rc)io->error=rc;return rc?EIO:0;
+}
+static int ops_local_verify_read(void *user,uint64_t at,uint8_t *data,size_t n,size_t *got) {
+    ops_local_verify *io=user;int rc=io->sink->read_at(io->sink->user,at,data,n,got);if(rc)io->error=rc;return rc?EIO:0;
+}
+static int ops_local_verify_cancel(void *user,uint64_t done,uint64_t total) {
+    ops_local_verify *io=user;(void)total;return ops_cancel(io->progress,io->user,MTP_COPY_LOCAL,done,io->size)!=0;
 }
 static int ops_local_file(psmtp_op_plan *p,psmtp_op_node *e,mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result) {
-    int fd=-1,rc,started=0;uint8_t *data=NULL,hash[32];uint64_t offset=0;psmtp_sha256 sha;mtp_copy_source source={0};
+    int fd=-1,rc,started=0;uint8_t *data=NULL;uint64_t offset=0;psmtp_sha256 sha;mtp_copy_source source={0};
+    psmtp_verify_capture capture={0};
     memset(result,0,sizeof(*result));source.size=e->phone.size;
     rc=ops_native_check(p->source.location.root,e->path,&e->native,1);if(rc) return rc;
     data=malloc(MTP_COPY_CHUNK);if(!data) return MTP_MEMORY;
+    if(psmtp_verify_capture_init(&capture,source.size)){free(data);return MTP_MEMORY;}
     started=1;rc=sink->begin(sink->user,&source);if(rc) goto done;
     fd=ops_open(p->source.location.root,e->path,O_RDONLY);if(fd<0) {rc=MTP_FILESYSTEM;goto done;}
     psmtp_sha256_init(&sha);
@@ -307,6 +332,7 @@ static int ops_local_file(psmtp_op_plan *p,psmtp_op_node *e,mtp_copy_sink *sink,
         size_t n=(size_t)(source.size-offset>MTP_COPY_CHUNK?MTP_COPY_CHUNK:source.size-offset),written=0;ssize_t k;
         rc=ops_cancel(progress,user,MTP_COPY_RECEIVE,offset,source.size);if(rc) goto done;
         do {k=read(fd,data,n);} while(k<0 && errno==EINTR);if(k<=0 || (size_t)k>n) {rc=MTP_FILESYSTEM;goto done;}
+        if(psmtp_verify_capture_feed(&capture,offset,data,(size_t)k)){rc=MTP_VERIFY;goto done;}
         psmtp_sha256_update(&sha,data,(size_t)k);
         while(written<(size_t)k) {size_t actual=0;rc=(sink->write)(sink->user,data+written,(size_t)k-written,&actual);if(rc || !actual || actual>(size_t)k-written) {if(!rc) rc=MTP_FILESYSTEM;goto done;}written+=actual;}
         offset+=(uint64_t)k;
@@ -315,12 +341,17 @@ static int ops_local_file(psmtp_op_plan *p,psmtp_op_node *e,mtp_copy_sink *sink,
     if(read(fd,data,1)!=0) {rc=MTP_VERIFY;goto done;}
     if(close(fd)) {fd=-1;rc=MTP_FILESYSTEM;goto done;}fd=-1;psmtp_sha256_final(&sha,result->digest);
     rc=sink->sync(sink->user);if(rc) goto done;
-    {ops_file *f=sink->user;psmtp_native_stat st;rc=psmtp_native_status(f->fd,&st);if(!rc) rc=ops_hash_native(p,p->destination_location.root,e->target,&st,hash,progress,user,MTP_COPY_LOCAL);}
-    if(!rc && memcmp(hash,result->digest,32)) rc=MTP_VERIFY;if(rc) goto done;
+    rc=sink->reopen_read(sink->user);if(rc)goto done;
+    {ops_local_verify io={sink,progress,user,source.size,0};psmtp_verify_source original=psmtp_verify_capture_source(&capture),destination={&io,ops_local_verify_size,ops_local_verify_read};
+        uint64_t compared=0;enum psmtp_verify_status status=psmtp_sparse_verify(&original,&destination,sink->verify_workspace,ops_local_verify_cancel,&io,&compared);
+        if(p->log)fprintf(p->log,"stage=local-sparse-verify status=%d compared=%" PRIu64 " windows=%zu file-bytes=%" PRIu64 " source=original-stream destination=reopened-readonly\n",status,compared,capture.count,source.size);
+        rc=status==PSMTP_VERIFY_OK?0:status==PSMTP_VERIFY_CANCELLED?MTP_CANCELLED:status==PSMTP_VERIFY_MISMATCH?MTP_VERIFY:io.error?io.error:MTP_FILESYSTEM;
+        if(rc)goto done;
+    }
     rc=ops_native_check(p->source.location.root,e->path,&e->native,1);if(rc)goto done;
     rc=ops_cancel(progress,user,MTP_COPY_PUBLISH,source.size,source.size);if(!rc) rc=sink->publish(sink->user,&result->published);
 done:
-    if(fd>=0 && close(fd)) rc=MTP_FILESYSTEM;free(data);
+    if(fd>=0 && close(fd)) rc=MTP_FILESYSTEM;psmtp_verify_capture_free(&capture);free(data);
     if(started) {int clean=sink->dispose(sink->user);if(clean) {result->cleanup_failed=1;if(!rc) rc=clean;}}
     return rc;
 }
@@ -398,48 +429,79 @@ int psmtp_op_mkdir(const psmtp_location *location,const char *path,mtp_client *c
         if(!path || !ops_write_area(path,0))return MTP_UNSUPPORTED;
         rc=ops_join(target,path,name);if(rc)return rc;
         pin=psmtp_native_directory(location->root,path);if(pin<0)return MTP_FILESYSTEM;
-        if(mkdir(target,0755))rc=errno==EEXIST?MTP_EXISTS:MTP_FILESYSTEM;
+        if(mkdir(target,0700))rc=errno==EEXIST?MTP_EXISTS:MTP_FILESYSTEM;
         if(!rc){fd=psmtp_native_directory(location->root,target);if(fd<0)rc=MTP_FILESYSTEM;
-            else {rc=psmtp_native_status(fd,&st);if(!rc && !S_ISDIR(st.st_mode))rc=MTP_VERIFY;if(close(fd) && !rc)rc=MTP_FILESYSTEM;}}
+            else {rc=psmtp_native_status(fd,&st);if(!rc && !S_ISDIR(st.st_mode))rc=MTP_VERIFY;
+                if(!rc)rc=psmtp_native_output_access(fd,1,location->kind==PSMTP_LOCATION_USB,log);
+                if(!rc && fsync(fd))rc=MTP_FILESYSTEM;if(close(fd) && !rc)rc=MTP_FILESYSTEM;}}
         if(!rc && fsync(pin))rc=MTP_FILESYSTEM;if(close(pin) && !rc)rc=MTP_FILESYSTEM;
     }
     if(log)fprintf(log,"stage=new-folder status=%d location=%d names-in-log=0\n",rc,location->kind);return rc;
 }
 
-typedef struct {psmtp_op_plan *plan;psmtp_op_node *node;int fd;mtp_copy_progress progress;void *user;psmtp_sha256 hash;uint64_t logged;uint8_t head[4096];size_t head_n;} ops_upload_io;
+typedef struct {psmtp_op_plan *plan;psmtp_op_node *node;int fd;mtp_copy_progress progress;void *user;psmtp_sha256 hash;uint64_t logged;psmtp_work_io_scope pause_scope;} ops_upload_io;
+static int ops_upload_resume(void *user){ops_upload_io *io=user;psmtp_native_stat st;int rc=psmtp_native_status(io->fd,&st);
+    if(!rc && !ops_same(&st,&io->node->native,1))rc=MTP_VERIFY;
+    if(!rc)rc=ops_native_check(io->plan->source.location.root,io->node->path,&io->node->native,1);return rc?MTP_DISCONNECTED:0;
+}
 static int ops_upload_read(void *v,uint8_t *data,size_t n) {
     ops_upload_io *io=v;size_t got=0;
     while(got<n){ssize_t k;do{k=read(io->fd,data+got,n-got);}while(k<0 && errno==EINTR);if(k<=0 || (size_t)k>n-got)return MTP_FILESYSTEM;got+=(size_t)k;}
-    if(io->head_n<sizeof(io->head)){size_t k=sizeof(io->head)-io->head_n;if(k>n)k=n;memcpy(io->head+io->head_n,data,k);io->head_n+=k;}
     psmtp_sha256_update(&io->hash,data,n);return 0;
 }
 static int ops_upload_progress(void *v,uint64_t done,uint64_t total) {ops_upload_io *io=v;
     if(done-io->logged>=UINT64_C(67108864) || done==total){if(io->plan->log)fprintf(io->plan->log,"stage=upload-progress bytes=%" PRIu64 "/%" PRIu64 "\n",done,total);io->logged=done;}
     return ops_cancel(io->progress,io->user,MTP_COPY_RECEIVE,done,total)!=0;
 }
-static int ops_upload_verify(psmtp_op_plan *p,psmtp_op_node *e,mtp_client *c,int extended,mtp_copy_progress progress,void *user,const uint8_t *head,size_t head_n,int full) {
-    uint8_t *data=malloc(MTP_COPY_CHUNK),digest[32];uint64_t offset=0,logged=0;psmtp_sha256 hash;int rc=0;
-    if(!data)return MTP_MEMORY;psmtp_sha256_init(&hash);
-    while(offset<(full?e->phone.size:head_n)){size_t n=(size_t)(e->phone.size-offset>MTP_COPY_CHUNK?MTP_COPY_CHUNK:e->phone.size-offset),got=0;
-        if(!full)n=head_n-(size_t)offset;
-        rc=ops_cancel(progress,user,MTP_COPY_LOCAL,offset,e->phone.size);if(rc)break;
-        rc=mtp_get_partial(c,e->uploaded_handle,offset,n,extended,data,&got);if(rc)break;if(!got || got>n){rc=MTP_VERIFY;break;}
-        if(!full && memcmp(data,head+(size_t)offset,got)){rc=MTP_VERIFY;break;}
-        psmtp_sha256_update(&hash,data,got);offset+=got;
-        if(offset-logged>=UINT64_C(67108864) || offset==e->phone.size){if(p->log)fprintf(p->log,"stage=upload-verify-progress bytes=%" PRIu64 "/%" PRIu64 " partial64=%d\n",offset,e->phone.size,extended);logged=offset;}
-    }
-    if(!rc){psmtp_sha256_final(&hash,digest);if(full && memcmp(digest,e->digest,32))rc=MTP_VERIFY;}
-    if(!rc)rc=ops_phone_destination(p,e,c);free(data);return rc;
+typedef struct {psmtp_op_plan *plan;psmtp_op_node *node;mtp_client *client;int fd,extended,error;mtp_copy_progress progress;void *user;} ops_sparse_upload;
+static int ops_sparse_upload_resume(void *user){ops_sparse_upload *io=user;psmtp_native_stat st;int rc=psmtp_native_status(io->fd,&st);
+    if(!rc && !ops_same(&st,&io->node->native,1))rc=MTP_VERIFY;
+    if(!rc)rc=ops_native_check(io->plan->source.location.root,io->node->path,&io->node->native,1);return rc?MTP_DISCONNECTED:0;
+}
+static int ops_sparse_upload_size(void *user,uint64_t *size) {
+    ops_sparse_upload *io=user;mtp_object_info info;int rc=mtp_get_object_info(io->client,io->node->uploaded_handle,&info);
+    if(!rc){*size=info.size32;if(info.size32==UINT32_MAX)rc=mtp_get_object_size(io->client,io->node->uploaded_handle,size);}
+    if(!rc && !ops_info_same(&info,&io->node->uploaded_info,1))rc=MTP_VERIFY;
+    if(rc)io->error=rc;return rc?EIO:0;
+}
+static int ops_sparse_native_size(void *user,uint64_t *size) {
+    ops_sparse_upload *io=user;psmtp_native_stat st;int rc=psmtp_native_status(io->fd,&st);
+    if(!rc && (!ops_same(&st,&io->node->native,1) || st.st_size<0))rc=MTP_VERIFY;
+    if(rc)io->error=rc;else *size=(uint64_t)st.st_size;return rc?EIO:0;
+}
+static int ops_sparse_native_read(void *user,uint64_t at,uint8_t *data,size_t n,size_t *got) {
+    ops_sparse_upload *io=user;int64_t offset;ssize_t k;*got=0;if(at>INT64_MAX)return EOVERFLOW;
+    offset=lseek(io->fd,(int64_t)at,SEEK_SET);if(offset<0)return errno?errno:EIO;if((uint64_t)offset!=at)return EIO;
+    k=read(io->fd,data,n);if(k<0)return errno?errno:EIO;*got=(size_t)k;return 0;
+}
+static int ops_sparse_phone_read(void *user,uint64_t at,uint8_t *data,size_t n,size_t *got) {
+    ops_sparse_upload *io=user;int rc=mtp_get_partial(io->client,io->node->uploaded_handle,at,n,io->extended,data,got);if(rc)io->error=rc;return rc?EIO:0;
+}
+static int ops_sparse_upload_cancel(void *user,uint64_t done,uint64_t total) {ops_sparse_upload *io=user;(void)total;return ops_cancel(io->progress,io->user,MTP_COPY_LOCAL,done,io->node->phone.size)!=0;}
+static int ops_upload_verify(psmtp_op_plan *p,psmtp_op_node *e,mtp_client *c,int extended,mtp_copy_progress progress,void *user,psmtp_verify_workspace *workspace) {
+    ops_sparse_upload io={p,e,c,-1,extended,0,progress,user};psmtp_verify_source source={&io,ops_sparse_native_size,ops_sparse_native_read},destination={&io,ops_sparse_upload_size,ops_sparse_phone_read};enum psmtp_verify_status status;uint64_t compared=0;int rc;
+    /* MTP SendObject completion is the protocol's write-completion boundary.
+     * It exposes no remote fsync/close API; verify reported size and samples.
+     * Native source is reopened O_RDONLY and its original identity checked. */
+    psmtp_work_io_scope pause_scope={0};io.fd=ops_open(p->source.location.root,e->path,O_RDONLY);if(io.fd<0)return MTP_FILESYSTEM;
+    psmtp_work_bind_io(&pause_scope,NULL,ops_sparse_upload_resume,&io);
+    status=psmtp_sparse_verify(&source,&destination,workspace,ops_sparse_upload_cancel,&io,&compared);
+    rc=status==PSMTP_VERIFY_OK?0:status==PSMTP_VERIFY_CANCELLED?MTP_CANCELLED:status==PSMTP_VERIFY_MISMATCH?MTP_VERIFY:io.error?io.error:MTP_FILESYSTEM;
+    psmtp_work_unbind_io(&pause_scope);if(close(io.fd) && !rc)rc=MTP_FILESYSTEM;
+    if(p->log)fprintf(p->log,"stage=upload-sparse-verify status=%d compared=%" PRIu64 " file-bytes=%" PRIu64 " partial64=%d remote-fsync-available=0\n",status,compared,e->phone.size,extended);
+    return rc?rc:ops_phone_destination(p,e,c);
 }
 static int ops_upload_execute(psmtp_op_plan *p,mtp_client *c,int move,mtp_copy_progress progress,void *user) {
     mtp_device_info *device=malloc(sizeof(*device));size_t i;int rc,standard=0,partial64=0;
+    psmtp_verify_workspace workspace={0};
     if(!device)return MTP_MEMORY;rc=mtp_get_device_info(c,device);
     if(!rc && (!device->identity_valid || memcmp(device->identity,p->destination_identity,32)))rc=MTP_VERIFY;
     if(!rc)rc=ops_upload_capabilities(p,device);
     if(!rc){standard=mtp_supports(device,0x101b);partial64=mtp_supports(device,0x95c1);}free(device);if(rc)return rc;
     rc=ops_upload_parent(p,c);if(!rc)rc=psmtp_op_space(p,c);if(rc)return rc;
-
+    /* Validate the whole native snapshot before creating the first object. */
     for(i=0;i<p->count;++i){psmtp_op_node *e=&p->nodes[i];rc=ops_native_check(p->source.location.root,e->path,&e->native,!e->folder);if(rc)return rc;}
+    if(psmtp_verify_workspace_init(&workspace))return MTP_MEMORY;
     for(i=0;i<p->count;++i){
         psmtp_op_node *e=&p->nodes[i];uint32_t parent=e->parent==SIZE_MAX?p->phone_parent:p->nodes[e->parent].uploaded_handle,*peers=NULL;size_t peer_count=0,k;int fd=-1;ops_upload_io io={0};
         int extended=partial64 && (!standard || e->phone.size>=UINT32_MAX);uint64_t started=c->io.now_ms(c->io.user);
@@ -454,6 +516,7 @@ static int ops_upload_execute(psmtp_op_plan *p,mtp_client *c,int move,mtp_copy_p
         free(peers);
         if(!rc){e->created=1;
             if(!e->folder){uint8_t extra;io.plan=p;io.node=e;io.fd=fd;io.progress=progress;io.user=user;psmtp_sha256_init(&io.hash);
+                psmtp_work_bind_io(&io.pause_scope,NULL,ops_upload_resume,&io);
                 rc=mtp_send_object(c,e->phone.size,ops_upload_read,ops_upload_progress,&io);
                 if(!rc && read(fd,&extra,1)!=0)rc=MTP_VERIFY;
                 if(!rc){psmtp_native_stat st;rc=psmtp_native_status(fd,&st);if(!rc && !ops_same(&st,&e->native,1))rc=MTP_VERIFY;}
@@ -461,18 +524,18 @@ static int ops_upload_execute(psmtp_op_plan *p,mtp_client *c,int move,mtp_copy_p
                 psmtp_sha256_final(&io.hash,e->digest);
             }
         }
-        if(fd>=0 && close(fd) && !rc)rc=MTP_FILESYSTEM;
+        psmtp_work_unbind_io(&io.pause_scope);if(fd>=0 && close(fd) && !rc)rc=MTP_FILESYSTEM;
         if(!rc){rc=mtp_get_object_info(c,e->uploaded_handle,&e->uploaded_info);
             if(!rc && (e->uploaded_info.storage!=p->phone_storage || (e->uploaded_info.parent!=parent && !(parent==MTP_ROOT && !e->uploaded_info.parent)) || strcmp(e->uploaded_info.name,e->name) || mtp_is_folder(&e->uploaded_info)!=e->folder || (!e->folder && e->uploaded_info.size32!=(e->phone.size>=UINT32_MAX?UINT32_MAX:(uint32_t)e->phone.size))))rc=MTP_VERIFY;
             if(!rc && !e->folder && e->phone.size>=UINT32_MAX)rc=ops_phone_destination(p,e,c);
-            if(!rc && !e->folder)rc=ops_upload_verify(p,e,c,extended,progress,user,io.head,io.head_n,move);
+            if(!rc && !e->folder)rc=ops_upload_verify(p,e,c,extended,progress,user,&workspace);
         }
         if(rc){if(c->poisoned)p->uncertain_upload=1;break;}
         e->verified=1;if(!e->folder)++p->copied;
-        if(p->log && !e->folder){size_t k;uint64_t ended=c->io.now_ms(c->io.user);fprintf(p->log,"stage=upload-file-verified item=%zu bytes=%" PRIu64 " elapsed-ms=%" PRIu64 " sha256=",i,e->phone.size,ended>=started?ended-started:0);for(k=0;k<32;++k)fprintf(p->log,"%02x",e->digest[k]);fprintf(p->log," verification=%s source-removed=0 names-in-log=0\n",move?"full-sha256-reread":"quick-prefix-size");}
+        if(p->log && !e->folder){size_t k;uint64_t ended=c->io.now_ms(c->io.user);fprintf(p->log,"stage=upload-file-verified item=%zu bytes=%" PRIu64 " elapsed-ms=%" PRIu64 " sha256=",i,e->phone.size,ended>=started?ended-started:0);for(k=0;k<32;++k)fprintf(p->log,"%02x",e->digest[k]);fprintf(p->log," verification=sparse-head-body-tail-size source-removed=0 names-in-log=0\n");}
     }
-
-
+    /* Never replay or guess a handle after an ambiguous device response.
+     * Known unverified files are removed only after matching their identity. */
     if(rc && !c->poisoned){size_t j;for(j=0;j<p->count;++j){psmtp_op_node *e=&p->nodes[j];
         if(e->created && !e->folder && !e->verified){mtp_object_info info;int clean=mtp_get_object_info(c,e->uploaded_handle,&info);
             if(!clean && e->uploaded_info.storage && ops_info_same(&info,&e->uploaded_info,1) && !info.protection)clean=mtp_delete_object(c,e->uploaded_handle);else if(!clean)clean=MTP_VERIFY;
@@ -481,6 +544,7 @@ static int ops_upload_execute(psmtp_op_plan *p,mtp_client *c,int move,mtp_copy_p
     }}
     if(rc && c->poisoned){p->uncertain_upload=1;p->cleanup_failed=1;}
     if(!rc && move)rc=psmtp_op_delete(p,c,1,progress,user);
+    psmtp_verify_workspace_free(&workspace);
     return ops_error(p,"upload-end",rc);
 }
 static int ops_empty_native(const char *path) {
@@ -490,11 +554,18 @@ static int ops_empty_native(const char *path) {
         if(strcmp(e->d_name,".") && strcmp(e->d_name,"..")) {rc=MTP_VERIFY;break;}}
     if(closedir(d)) rc=MTP_FILESYSTEM;return rc;
 }
+static int ops_native_removed(const char *root,const char *path) {
+    int fd=ops_open(root,path,O_RDONLY),error=errno;
+    if(fd<0)return error==ENOENT?0:MTP_FILESYSTEM;
+    if(close(fd))return MTP_FILESYSTEM;
+    return MTP_VERIFY;
+}
 int psmtp_op_delete(psmtp_op_plan *p,mtp_client *client,int verified_move,mtp_copy_progress progress,void *user) {
     size_t i;int phone=p->source.location.kind==PSMTP_LOCATION_PHONE,rc=0;
+    if(!p->count || p->count>MTP_PLAN_ITEMS)return MTP_STATE;
     if(phone && (!client || !p->delete_supported)) return MTP_UNSUPPORTED;
     if(!phone && !ops_write_area(p->source.path,1)) return MTP_UNSUPPORTED;
-
+    /* Validate the entire snapshot before deleting the first entry. */
     for(i=0;i<p->count;++i) {
         psmtp_op_node *e=&p->nodes[i];
         rc=phone?ops_phone_check(client,e,1):ops_native_check(p->source.location.root,e->path,&e->native,!e->folder);if(rc) return ops_error(p,"delete-precheck",rc);
@@ -505,8 +576,9 @@ int psmtp_op_delete(psmtp_op_plan *p,mtp_client *client,int verified_move,mtp_co
         }
     }
     for(i=p->count;i>0;--i) {
-        psmtp_op_node *e=&p->nodes[i-1];rc=ops_cancel(progress,user,PSMTP_OP_DELETE,p->removed,p->count);if(rc) break;
-        rc=phone?ops_phone_check(client,e,!e->folder):ops_native_check(p->source.location.root,e->path,&e->native,!e->folder);if(rc) break;
+        psmtp_op_node *e=&p->nodes[i-1];const char *stage=e->folder?"delete-folder-identity":"delete-file-identity";
+        rc=ops_cancel(progress,user,PSMTP_OP_DELETE,p->removed,p->count);if(rc) break;
+        rc=phone?ops_phone_check(client,e,!e->folder):ops_native_check(p->source.location.root,e->path,&e->native,!e->folder);if(rc){ops_failure(p,stage,rc);break;}
         if(verified_move && !e->folder){rc=p->destination_location.kind==PSMTP_LOCATION_PHONE?ops_phone_destination(p,e,client):ops_native_check(p->destination_location.root,e->target,&e->destination,1);if(rc)break;}
         if(verified_move && e->folder) {rc=p->destination_location.kind==PSMTP_LOCATION_PHONE?ops_phone_destination(p,e,client):ops_native_check(p->destination_location.root,e->target,&e->destination,0);if(rc) break;}
         if(phone) {
@@ -515,30 +587,40 @@ int psmtp_op_delete(psmtp_op_plan *p,mtp_client *client,int verified_move,mtp_co
             {mtp_object_info info;int missing=mtp_get_object_info(client,e->phone.handle,&info);if(missing!=MTP_RESPONSE || client->response!=0x2009) {rc=missing?missing:MTP_VERIFY;p->uncertain_delete=client->poisoned;break;}}
         } else {
             if(!ops_write_area(e->path,1)) {rc=MTP_UNSUPPORTED;break;}
-            if(e->folder) {rc=ops_empty_native(e->path);if(rc) break;rc=rmdir(e->path)?MTP_FILESYSTEM:0;}
-            else rc=unlink(e->path)?MTP_FILESYSTEM:0;
-            if(rc) break;e->removed=1;++p->removed;rc=ops_sync_parent(p->source.location.root,e->path);if(rc) break;
+            if(e->folder) {stage="delete-folder-empty";rc=ops_empty_native(e->path);
+                if(!rc){stage="delete-folder-rmdir";rc=rmdir(e->path)?MTP_FILESYSTEM:0;}}
+            else {stage="delete-file-unlink";rc=unlink(e->path)?MTP_FILESYSTEM:0;}
+            if(!rc){stage="delete-removal-check";rc=ops_native_removed(p->source.location.root,e->path);}
+            if(rc){ops_failure(p,stage,rc);break;}
+            e->removed=1;++p->removed;rc=ops_sync_parent(p->source.location.root,e->path);
+            if(rc){ops_failure(p,"delete-parent-sync",rc);break;}
         }
+        if(p->log)fprintf(p->log,"stage=delete-item-removed item=%zu folder=%d selected-root=%d location=%d names-in-log=0\n",i-1,e->folder,i==1,p->source.location.kind);
     }
+    if(!rc && (!p->nodes[0].removed || p->removed!=p->count))rc=MTP_VERIFY;
+    if(p->log)fprintf(p->log,"stage=delete-selection status=%d selected-folder=%d selected-root-removed=%d removed=%zu total=%zu failed-at=%s errno=%d mtp-response=0x%04x names-in-log=0\n",
+        rc,p->source.folder,p->nodes[0].removed,p->removed,p->count,p->error_stage?p->error_stage:"none",p->error_number,phone?client->response:0);
     if(!rc && !phone && !p->source.folder && p->nodes[0].removed) {int clean=psmtp_store_remove_file_wrapper(p->source.path,p->log);if(clean) p->cleanup_failed=1;}
     return ops_error(p,"delete-end",rc);
 }
 int psmtp_op_execute(psmtp_op_plan *p,mtp_client *client,int move,mtp_copy_progress progress,void *user) {
     ops_file f={0};mtp_copy_sink sink;int rc=0,fd=-1;size_t i;
+    psmtp_verify_workspace workspace={0};
     p->error_stage=NULL;p->error_number=0;
     if(!p->count || !p->destination[0]) return MTP_STATE;
     if(move && (p->source.location.kind==PSMTP_LOCATION_PHONE?!p->delete_supported:!ops_write_area(p->source.path,1))) return MTP_UNSUPPORTED;
     if(p->destination_location.kind==PSMTP_LOCATION_PHONE){if(!client || !client->session || client->poisoned)return MTP_STATE;return ops_upload_execute(p,client,move,progress,user);}
     f.plan=p;f.fd=f.destination_dir=f.parent_dir=-1;
     rc=psmtp_space_require(p->destination_location.root,p->destination,p->bytes,p->log);if(rc)return ops_error(p,"space",rc);
-
+    if(psmtp_verify_workspace_init(&workspace))return MTP_MEMORY;
+    /* Destination identities and all source metadata are checked before writes. */
     rc=ops_destination_check(p);if(rc) goto done;
     for(i=0;i<p->count;++i) {psmtp_op_node *e=&p->nodes[i];rc=p->source.location.kind==PSMTP_LOCATION_PHONE?ops_phone_check(client,e,1):ops_native_check(p->source.location.root,e->path,&e->native,!e->folder);if(rc) goto done;}
     for(i=0;i<p->count;++i) if(p->nodes[i].folder) {
         psmtp_op_node *e=&p->nodes[i];rc=ops_cancel(progress,user,PSMTP_OP_SCAN,i,p->count);if(rc) goto done;
         rc=ops_destination_check(p);if(rc) goto done;
         if(e->parent!=SIZE_MAX) {psmtp_op_node *parent=&p->nodes[e->parent];rc=ops_native_check(p->destination_location.root,parent->target,&parent->destination,0);if(rc) goto done;}
-        if(mkdir(e->target,0755)) {rc=MTP_FILESYSTEM;goto done;}e->created=1;
+        if(mkdir(e->target,0700)) {rc=MTP_FILESYSTEM;goto done;}e->created=1;
         fd=psmtp_native_directory(p->destination_location.root,e->target);if(fd<0) {rc=MTP_FILESYSTEM;goto done;}
         rc=psmtp_native_status(fd,&e->destination);if(fsync(fd)) rc=MTP_FILESYSTEM;if(close(fd)) rc=MTP_FILESYSTEM;fd=-1;if(rc) goto done;
     }
@@ -546,15 +628,36 @@ int psmtp_op_execute(psmtp_op_plan *p,mtp_client *client,int move,mtp_copy_progr
         psmtp_op_node *e=&p->nodes[i];mtp_copy_result result;
         f.node=e;f.fd=f.destination_dir=f.parent_dir=-1;f.owned=f.published=0;
         sink.user=&f;sink.begin=ops_file_begin;sink.space=ops_file_space;sink.write=ops_file_write;sink.sync=ops_file_sync;sink.rewind=ops_file_rewind;sink.read=ops_file_read;sink.publish=ops_file_publish;sink.dispose=ops_file_dispose;sink.prepare=NULL;
-        rc=p->source.location.kind==PSMTP_LOCATION_PHONE?(move?mtp_copy_run:mtp_copy_run_quick)(client,&e->phone,&sink,progress,user,&result,p->log):ops_local_file(p,e,&sink,progress,user,&result);
+        sink.reopen_read=ops_file_reopen_read;sink.size=ops_file_size;sink.read_at=ops_file_read_at;sink.verify_workspace=&workspace;
+        rc=p->source.location.kind==PSMTP_LOCATION_PHONE?mtp_copy_run_streamed(client,&e->phone,&sink,progress,user,&result,p->log,1,PSMTP_DOWNLOAD_READER):ops_local_file(p,e,&sink,progress,user,&result);
         if(result.published) {++p->copied;e->created=1;}
         if(rc || !result.published) {if(!rc) rc=MTP_VERIFY;goto done;}e->verified=1;memcpy(e->digest,result.digest,32);
-        if(p->log) {size_t k;fprintf(p->log,"stage=operation-file-verified item=%zu bytes=%" PRIu64 " sha256=",i,e->phone.size);for(k=0;k<32;++k) fprintf(p->log,"%02x",e->digest[k]);fputc('\n',p->log);}
+        if(p->log) {size_t k;fprintf(p->log,"stage=operation-file-verified item=%zu bytes=%" PRIu64 " sha256=",i,e->phone.size);for(k=0;k<32;++k) fprintf(p->log,"%02x",e->digest[k]);fputs(" verification=sparse-head-body-tail-size\n",p->log);}
     }
-    for(i=p->count;i>0;--i) if(p->nodes[i-1].folder) {rc=ops_native_check(p->destination_location.root,p->nodes[i-1].target,&p->nodes[i-1].destination,0);if(!rc) rc=ops_sync_parent(p->destination_location.root,p->nodes[i-1].target);if(rc) goto done;p->nodes[i-1].verified=1;}
+    for(i=p->count;i>0;--i) if(p->nodes[i-1].folder) {
+        psmtp_op_node *e=&p->nodes[i-1];
+        rc=ops_native_check(p->destination_location.root,e->target,&e->destination,0);if(rc) goto done;
+        fd=psmtp_native_directory(p->destination_location.root,e->target);if(fd<0){rc=MTP_FILESYSTEM;goto done;}
+        rc=psmtp_native_output_access(fd,1,p->destination_location.kind==PSMTP_LOCATION_USB,p->log);
+        if(!rc && fsync(fd))rc=MTP_FILESYSTEM;if(close(fd) && !rc)rc=MTP_FILESYSTEM;fd=-1;if(rc) goto done;
+        rc=ops_sync_parent(p->destination_location.root,e->target);if(rc) goto done;e->verified=1;
+    }
     if(move) rc=psmtp_op_delete(p,client,1,progress,user);
 done:
     if(fd>=0 && close(fd) && !rc) rc=MTP_FILESYSTEM;
+    /* A cancelled/failed user copy may leave a partial tree. Let external
+     * tools remove it too, but only touch directories created and pinned by
+     * this operation; a replaced path or old destination is never selected. */
+    if(rc)for(i=p->count;i>0;--i) {
+        psmtp_op_node *e=&p->nodes[i-1];int share;
+        if(!e->folder || !e->created || !e->destination.st_ino)continue;
+        if(ops_native_check(p->destination_location.root,e->target,&e->destination,0)){p->cleanup_failed=1;continue;}
+        fd=psmtp_native_directory(p->destination_location.root,e->target);if(fd<0){p->cleanup_failed=1;continue;}
+        share=psmtp_native_output_access(fd,1,p->destination_location.kind==PSMTP_LOCATION_USB,p->log);
+        if(fsync(fd))share=MTP_FILESYSTEM;if(close(fd))share=MTP_FILESYSTEM;fd=-1;
+        if(share)p->cleanup_failed=1;
+    }
     if(ops_sync_parent(p->destination_location.root,p->nodes[0].target) && !rc) rc=MTP_FILESYSTEM;
+    psmtp_verify_workspace_free(&workspace);
     return ops_error(p,"end",rc);
 }
