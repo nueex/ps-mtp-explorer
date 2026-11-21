@@ -36,7 +36,7 @@
 | **Familiar file actions** | Copy, Move, Paste, Rename, Delete and Properties across your phone, USB drive and internal HDD. |
 | **New Folder** | Create a directory in the current writable location with the on-screen keyboard. |
 | **Direct PKG installation** | Supports installing PKGs directly through the app from your phone, USB drive or internal HDD. |
-| **Direct Download (JetBird App)** | Receive downloads directly on PS4 over USB or certificate-pinned Wireless (QR or 6-digit pairing), download directly over HTTPS, and use Parallel Install while downloading. |
+| **Direct Download ([JetBird App](https://github.com/nueex/jetbird))** | Receive downloads directly on PS4 over USB or certificate-pinned Wireless (QR or 6-digit pairing), download directly over HTTPS, and use Parallel Install while downloading. |
 | **Built-in media & file viewers** | View images with zoom and pan, view and edit UTF-8 text files with the PlayStation keyboard, and play videos and music (MP3, FLAC, WAV) directly in the app. |
 | **Archive manager** | Extract ZIP, RAR/RAR5, 7z, TAR, Gzip, Bzip2, XZ, Zstandard and CPIO archives, and compress files or folders across 12 formats with optional AES-256 password protection. |
 | **Multi-select & batch actions** | Select multiple files and folders with **Square** to copy, move, delete or compress in a single batch. |
@@ -59,6 +59,12 @@ PS MTP Explorer 3.0 includes **Light** (default), **Dark**, and **Classic** them
 | Dark theme | Classic theme |
 | :---: | :---: |
 | ![PS MTP Explorer 3.0 — Dark theme](assets/explorer-dark.png) | ![PS MTP Explorer 3.0 — Classic theme](assets/explorer-classic.png) |
+
+## JetBird companion app
+
+For **Direct Download** and **Parallel PKG Installation**, pair PS MTP Explorer 3.0 with **[JetBird](https://github.com/nueex/jetbird)** — the official open-source Android companion app by nueex. JetBird combines a multi-part download manager and built-in ad-blocking browser with direct **USB Transfer**, **Wireless Transfer** (QR code and 6-digit pairing over certificate-pinned TLS), and console-side **Direct PS4 Download** straight to your PS4.
+
+- **Download & source code:** [github.com/nueex/jetbird](https://github.com/nueex/jetbird)
 
 ## Hardware safety
 
