@@ -1,0 +1,7 @@
+dr_libs by David Reid. PS MTP Explorer uses the MIT No Attribution option.
+Upstream https://github.com/mackron/dr_libs/tree/7f032b984ae5dd3ab8a58721375aca9200f91965
+
+Unmodified vendored headers and SHA-256 digests
+dr_flac.h bd569c910a7c465e481fd50af84e2871e81e2154e30ac510d98f953cc0d5a546
+dr_mp3.h bd539c0cafee96a73b6075607aa3caae375ca1eda7eeb8479b87b33b16212570
+dr_wav.h a0843ec781559ec2bc733e352356a6df8739a6237ad55540773cd8b8d17cac33

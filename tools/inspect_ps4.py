@@ -82,7 +82,8 @@ def elf(path, sony=False, sdk=None):
                     name,info,_,index,value,sz=struct.unpack_from('<IBBHQQ',buf,at)
                     if index==0 and name: imports.append(cstr(strings,name))
         allowed={'libkernel.so','libSceVideoOut.so','libScePad.so','libSceUserService.so','libSceSysmodule.so'}
-        if set(needed) not in (allowed,allowed|{'libSceSystemService.so'},allowed|{'libSceSystemService.so','libSceAudioOut.so'},allowed|{'libSceSystemService.so','libSceAudioOut.so','libSceNet.so'}):
+        optional={'libSceSystemService.so','libSceAudioOut.so','libSceGnmDriver.so','libSceNet.so','libSceNetCtl.so','libSceRandom.so'}
+        if not allowed <= set(needed) <= allowed|optional:
             raise ValueError('Unexpected or missing dynamic dependencies: '+str(needed))
         if sdk is not None:
             exports=set().union(*(exported_symbols(Path(sdk)/'lib'/name) for name in needed))

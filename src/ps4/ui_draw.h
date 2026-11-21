@@ -10,6 +10,7 @@
 #ifndef PSMTP_UI_DRAW_H
 #define PSMTP_UI_DRAW_H
 #include <stdint.h>
+#include "psmtp/ui_format.h"
 #define UI_RGB(r,g,b) (0xff000000u|(uint32_t)(r)|((uint32_t)(g)<<8)|((uint32_t)(b)<<16))
 #define UI_WHITE UI_RGB(237,231,232)
 #define UI_MUTED UI_RGB(155,148,150)
@@ -20,17 +21,26 @@ enum {UI_WORDMARK,UI_PLATFORM,UI_FOLDER,UI_PHONE,UI_USB,UI_DRIVE,UI_SETTINGS,UI_
 enum {UI_BTN_CROSS,UI_BTN_CIRCLE,UI_BTN_TRIANGLE,UI_BTN_SQUARE,UI_BTN_DPAD,UI_BTN_L1,UI_BTN_R1,UI_BTN_L2,UI_BTN_R2,UI_BTN_L3,UI_BTN_R3,UI_BTN_TOUCH,UI_BTN_OPTIONS};
 void ui_button(int,int,int,int,uint32_t);
 void ui_draw_begin(uint32_t *);
+void ui_draw_theme(int);
+uint32_t ui_theme_color(uint32_t);
 void ui_draw_close(void);
 void ui_rect(int,int,int,int,uint32_t);
 void ui_alpha(int,int,int,int,uint32_t,unsigned);
 void ui_box(int,int,int,int,int,uint32_t,uint32_t,int);
+void ui_explorer_card(unsigned,int,int,int,int,int,int);
 void ui_line(int,int,int,int,int,uint32_t,unsigned);
 void ui_ring(int,int,int,int,uint32_t,unsigned);
+void ui_arrow(int,int,int,uint32_t);
 void ui_art(int,int,int,int,int,uint32_t);
+void ui_file_icon(psmtp_file_kind,int,int,int);
+void ui_music_note(int,int,int,uint32_t);
 void ui_text(int,int,int,int,const char *,uint32_t);
 void ui_center(int,int,int,int,const char *,uint32_t);
 void ui_shadow(int,int,int,int,int);
 void ui_backdrop(void);
 void ui_settings_backdrop(void);
 void ui_image(const uint32_t *,unsigned,unsigned,int,int,int,int);
+void ui_image_region(const uint32_t *,unsigned,unsigned,unsigned,unsigned,unsigned,int,int,int,int);
+void ui_image_reset(void);
+void ui_video(const uint32_t *,unsigned,unsigned,float);
 #endif

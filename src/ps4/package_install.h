@@ -14,8 +14,10 @@
 #include "psmtp/install_error.h"
 #include "phone_install_server.h"
 typedef struct psmtp_install_session psmtp_install_session;
-typedef struct {uint64_t done,total;int task,complete,source_error,background;uint32_t native_error;unsigned requests;int percent,progress_known,preparing;psmtp_install_failure failure;} psmtp_install_report;
+typedef struct {uint64_t done,total;int task,complete,source_error,background;uint32_t native_error;unsigned requests;int percent,progress_known,preparing,copy_percent;psmtp_install_failure failure;} psmtp_install_report;
 int psmtp_install_prepare(psmtp_install_session **,const psmtp_op_ref *,mtp_client *,psmtp_pkg_info *,FILE *);
+int psmtp_install_prepare_stream(psmtp_install_session **,const char *,const psmtp_phone_source *,
+    void (*retain)(void *),void (*release)(void *),FILE *);
 /* Confirmed phone copy and fast size/sample validation replace the session with a local
  * source. Only the owned staging copy is removed when the attempt ends. */
 int psmtp_install_stage(psmtp_install_session **,int,mtp_copy_progress,void *);

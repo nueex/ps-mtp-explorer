@@ -64,7 +64,10 @@ static void close_signal(int signo){
     errno=saved_errno;
 }
 int psmtp_lifecycle_requested(void){return __atomic_load_n(&life.requested,__ATOMIC_ACQUIRE);}
-void psmtp_lifecycle_request_exit(void){__atomic_store_n(&life.requested,1,__ATOMIC_RELEASE);}
+void psmtp_lifecycle_request_exit(void){
+    int expected=0;
+    (void)__atomic_compare_exchange_n(&life.requested,&expected,1,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
+}
 void psmtp_lifecycle_shutdown_begin(void){
     int expected=0;
     (void)__atomic_compare_exchange_n(&life.requested,&expected,1,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
@@ -157,9 +160,10 @@ static void lifecycle_poll_impl(void){
     if(rc){if(rc!=life.status_error)psmtp_lifecycle_mark("system-status-error",rc);life.status_error=rc;__atomic_store_n(&life.pause,1,__ATOMIC_RELEASE);return;}
     life.status_error=0;memcpy(&event_count,status.bytes,4);overlay=status.bytes[4]!=0;background=status.bytes[5]!=0;
     {int paused=overlay || background;if(life.pause && !paused)++life.resume_epoch;__atomic_store_n(&life.pause,paused,__ATOMIC_RELEASE);}
-    if(overlay!=life.last_overlay || background!=life.last_background){
+    if(overlay!=life.last_overlay || background!=__atomic_load_n(&life.last_background,__ATOMIC_RELAXED)){
         psmtp_lifecycle_mark("system-ui-overlay",overlay);psmtp_lifecycle_mark("system-background",background);
-        life.last_overlay=overlay;life.last_background=background;
+        life.last_overlay=overlay;
+        __atomic_store_n(&life.last_background,background,__ATOMIC_RELEASE);
     }
     if(!life.last_heartbeat || now-life.last_heartbeat>=5000){psmtp_lifecycle_mark("main-checkpoint-alive",background);life.last_heartbeat=now;}
     /* Record known event ABI, without inventing an EXIT_REQUESTED event.
@@ -171,6 +175,8 @@ static void lifecycle_poll_impl(void){
     }
 }
 void psmtp_lifecycle_poll(void){int saved_errno=errno;lifecycle_poll_impl();errno=saved_errno;}
+int psmtp_lifecycle_background(void){return __atomic_load_n(&life.last_background,__ATOMIC_ACQUIRE)>0;}
+int psmtp_lifecycle_system_service_available(void){return life.status!=NULL;}
 void psmtp_lifecycle_transfer_state(int *pause,unsigned *epoch){*pause=__atomic_load_n(&life.pause,__ATOMIC_ACQUIRE);*epoch=life.resume_epoch;}
 void psmtp_lifecycle_close(void){
     int fd=__atomic_exchange_n(&life.fd,-1,__ATOMIC_ACQ_REL);

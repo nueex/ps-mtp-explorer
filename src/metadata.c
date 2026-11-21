@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "preview_decode_budget.h"
+#include "image_scale.h"
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
@@ -24,6 +25,9 @@
 #define STBI_NO_SIMD
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
+#define STBI_ONLY_BMP
+#define STBI_ONLY_GIF
+#define STBI_ONLY_TGA
 #define STBI_NO_STDIO
 #define STBI_NO_HDR
 #define STBI_NO_LINEAR
@@ -181,8 +185,48 @@ static int image_estimate(const image_layout *s,size_t length,uint64_t *bytes){
     if(!image_add(&peak,65536))return 0;*bytes=peak;return 1;
 }
 void psmtp_metadata_free(psmtp_metadata *m){free(m->image);memset(m,0,sizeof(*m));}
+int psmtp_decode_still(const uint8_t *data,size_t length,uint32_t **pixels,unsigned *width,unsigned *height){
+    int w,h,channels,rc=MTP_PROTOCOL;
+    *pixels=NULL;*width=*height=0;
+    if(!data || !length)return MTP_PROTOCOL;
+    if(length>64u*1024u*1024u)return MTP_LIMIT;
+    image_layout layout;
+    if(image_header(data,length,&layout) && !image_complete(data,length,layout.png))return MTP_PROTOCOL;
+    psmtp_decode_budget *previous=psmtp_decode_current,*budget=calloc(1,sizeof(*budget));
+    if(!budget)return MTP_MEMORY;
+    budget->refs=1;budget->limit=160u*1024u*1024u-length;
+    psmtp_decode_current=budget;
+    if(stbi_info_from_memory(data,(int)length,&w,&h,&channels) && w>0 && h>0){
+        size_t count=(size_t)w*h;
+        if(count>24u*1024u*1024u)rc=MTP_LIMIT;
+        else {
+            unsigned char *decoded=stbi_load_from_memory(data,(int)length,&w,&h,&channels,4);
+            if(decoded){
+                int orient=orientation(data,length);
+                *width=orient>=5?(unsigned)h:(unsigned)w;
+                *height=orient>=5?(unsigned)w:(unsigned)h;
+                *pixels=malloc(count*4);
+                rc=*pixels?0:MTP_MEMORY;
+                if(*pixels)for(unsigned y=0;y<*height;++y)for(unsigned x=0;x<*width;++x){
+                    unsigned sx=x,sy=y;
+                    if(orient==2)sx=w-1-x;else if(orient==3){sx=w-1-x;sy=h-1-y;}
+                    else if(orient==4)sy=h-1-y;else if(orient==5){sx=y;sy=x;}
+                    else if(orient==6){sx=y;sy=h-1-x;}else if(orient==7){sx=w-1-y;sy=h-1-x;}
+                    else if(orient==8){sx=w-1-y;sy=x;}
+                    memcpy(*pixels+(size_t)y*(*width)+x,decoded+((size_t)sy*w+sx)*4,4);
+                }
+            }
+        }
+    }
+    psmtp_decode_cleanup(budget);
+    psmtp_decode_current=previous;
+    if(budget->limited)rc=MTP_LIMIT;else if(budget->oom)rc=MTP_MEMORY;
+    psmtp_decode_release(budget);
+    if(rc){free(*pixels);*pixels=NULL;*width=*height=0;}
+    return rc;
+}
 int psmtp_metadata_image(const uint8_t *bytes,size_t length,psmtp_metadata *m){
-    int w=0,h=0,channels=0,rc=MTP_PROTOCOL;unsigned orient,x,y,rw,rh,tw,th;unsigned char *rgba=NULL;
+    int w=0,h=0,channels=0,rc=MTP_PROTOCOL;unsigned orient,rw,rh,tw,th;unsigned char *rgba=NULL;
     image_layout layout;psmtp_decode_budget *budget=NULL,*previous=psmtp_decode_current;uint64_t estimate=0,reserved;
     free(m->image);m->image=NULL;m->image_width=m->image_height=0;m->fallback_image=NULL;m->preview_reason=PSMTP_PREVIEW_NONE;
     m->decode_peak_bytes=m->decode_live_bytes=m->decode_estimate_bytes=0;m->decode_allocations=m->decode_started=0;
@@ -207,10 +251,18 @@ int psmtp_metadata_image(const uint8_t *bytes,size_t length,psmtp_metadata *m){
     tw=rw>256?256:rw;th=(unsigned)((uint64_t)rh*tw/rw);if(th>256){th=256;tw=(unsigned)((uint64_t)rw*th/rh);}if(!tw)tw=1;if(!th)th=1;
     m->image=malloc((size_t)tw*th*4);if(!m->image){m->preview_reason=PSMTP_PREVIEW_SYSTEM_MEMORY;rc=MTP_MEMORY;goto done;}
     m->image_width=tw;m->image_height=th;
-    for(y=0;y<th;++y)for(x=0;x<tw;++x){unsigned rx=(unsigned)((uint64_t)x*rw/tw),ry=(unsigned)((uint64_t)y*rh/th),sx=rx,sy=ry;const uint8_t *p;
-        if(orient==2)sx=w-1-rx;else if(orient==3){sx=w-1-rx;sy=h-1-ry;}else if(orient==4)sy=h-1-ry;
-        else if(orient==5){sx=ry;sy=rx;}else if(orient==6){sx=ry;sy=h-1-rx;}else if(orient==7){sx=w-1-ry;sy=h-1-rx;}else if(orient==8){sx=w-1-ry;sy=rx;}
-        p=rgba+((size_t)sy*w+sx)*4;m->image[y*tw+x]=p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;
+    /* Walk the decoded pixels in display orientation without allocating a
+     * rotated copy or changing the preview's decode budget. */
+    const unsigned char *origin=rgba;
+    ptrdiff_t step_right=4,step_down=(ptrdiff_t)w*4;
+    if(orient==2 || orient==3 || orient==7 || orient==8){origin+=(w-1)*step_right;step_right=-step_right;}
+    if(orient==3 || orient==4 || orient==6 || orient==7){origin+=(h-1)*step_down;step_down=-step_down;}
+    ptrdiff_t step_x=orient>=5?step_down:step_right,step_y=orient>=5?step_right:step_down;
+    psmtp_image_taps columns[256];
+    for(unsigned x=0;x<tw;++x)columns[x]=psmtp_image_axis(x,rw,tw);
+    for(unsigned y=0;y<th;++y){
+        psmtp_image_taps ty=psmtp_image_axis(y,rh,th);
+        for(unsigned x=0;x<tw;++x)m->image[y*tw+x]=psmtp_image_sample(origin,step_x,step_y,columns[x],ty);
     }
     m->preview_reason=PSMTP_PREVIEW_OK;rc=0;
 done:
@@ -253,9 +305,62 @@ static int pkg(psmtp_meta_reader *r,psmtp_metadata *m){
         else {if(length>131072u)continue;data=block(r,offset,length);if(data){sfo(m,data,length);free(data);}}}
     return 0;
 }
+static int mp4_atom_header(psmtp_meta_reader *r,uint64_t at,uint64_t end,uint8_t h[16],uint64_t *size,uint64_t *head){
+    if(end-at<8)return MTP_LIMIT;
+    int rc=read_at(r,at,h,8);
+    if(rc)return rc;
+    *size=be32(h);*head=8;
+    if(*size==1){
+        if(end-at<16 || read_at(r,at+8,h+8,8))return MTP_PROTOCOL;
+        *size=be64(h+8);*head=16;
+    }
+    if(!*size)*size=end-at;
+    return *size<*head || *size>end-at?MTP_PROTOCOL:0;
+}
+
+/* Scan only the track hierarchy and inspect the first sample description of
+ * an audio track. Skip media data and unrelated file metadata. */
+static int mp4_audio_codec(psmtp_meta_reader *r,uint64_t start,uint64_t end,unsigned depth,unsigned *visited,uint32_t *codec){
+    static const char *const containers[]={"moov","trak","mdia","minf","stbl"};
+    int is_audio=0;
+    uint32_t description=0;
+    for(uint64_t at=start;at<end;){
+        uint8_t h[16];uint64_t size,head;
+        if(++*visited>4096)return MTP_LIMIT;
+        int rc=mp4_atom_header(r,at,end,h,&size,&head);
+        if(rc)return rc;
+        if(depth==3 && !memcmp(h+4,"hdlr",4) && size-head>=12){
+            rc=read_at(r,at+head,h,12);
+            if(rc)return rc;
+            is_audio=!memcmp(h+8,"soun",4);
+        }else if(depth==5 && !memcmp(h+4,"stsd",4) && size-head>=16){
+            rc=read_at(r,at+head,h,16);
+            if(rc)return rc;
+            uint32_t entry_size=be32(h+8);
+            if(be32(h+4) && entry_size>=8 && entry_size<=size-head-8){
+                *codec=be32(h+12);
+                return 0;
+            }
+        }else if(depth<5 && !memcmp(h+4,containers[depth],4)){
+            rc=mp4_audio_codec(r,at+head,at+size,depth+1,visited,&description);
+            if(rc && rc!=MTP_UNSUPPORTED)return rc;
+            if(!rc && depth!=3){*codec=description;return 0;}
+        }
+        at+=size;
+    }
+    if(is_audio && description){*codec=description;return 0;}
+    return MTP_UNSUPPORTED;
+}
+
+int psmtp_metadata_mp4_audio_codec(psmtp_meta_reader *r,uint32_t *codec){
+    unsigned visited=0;
+    *codec=0;r->consumed=0;
+    return mp4_audio_codec(r,0,r->size,0,&visited,codec);
+}
+
 static int atoms(psmtp_meta_reader *r,psmtp_metadata *m,uint64_t start,uint64_t end,unsigned depth,unsigned *visited,int cover){
     uint64_t at=start;if(depth>9)return MTP_LIMIT;
-    while(at<end){uint8_t h[40];uint64_t size,head=8,data;int rc;if(++*visited>4096 || end-at<8)return MTP_LIMIT;rc=read_at(r,at,h,8);if(rc)return rc;size=be32(h);if(size==1){if(end-at<16 || read_at(r,at+8,h+8,8))return MTP_PROTOCOL;size=be64(h+8);head=16;}if(!size)size=end-at;if(size<head || size>end-at)return MTP_PROTOCOL;data=at+head;
+    while(at<end){uint8_t h[40];uint64_t size,head,data;int rc;if(++*visited>4096)return MTP_LIMIT;rc=mp4_atom_header(r,at,end,h,&size,&head);if(rc)return rc;data=at+head;
         if(!memcmp(h+4,"mvhd",4) && size-head>=24){size_t length=size-head<40?(size_t)(size-head):40;if(!read_at(r,data,h,length)){uint32_t scale=h[0]==1?be32(h+20):be32(h+12);uint64_t duration=h[0]==1?length>=32?be64(h+24):0:be32(h+16);if(scale && duration<=UINT64_MAX/1000)m->duration_ms=duration*1000/scale;}}
         else if(!memcmp(h+4,"tkhd",4) && size-head>=8){if(!read_at(r,at+size-8,h,8)){unsigned w=be32(h)>>16,height=be32(h+4)>>16;if(w && height){m->width=w;m->height=height;}}}
         else if(!memcmp(h+4,"stsd",4) && size-head>=16){if(!read_at(r,data,h,16)){memcpy(m->codec,h+12,4);m->codec[4]=0;}}

@@ -53,5 +53,8 @@ int mtp_copy_run(mtp_client *,const mtp_copy_source *,const mtp_copy_sink *,mtp_
 /* The optional executor must join every consumer before returning: verification
  * and disposal borrow the same sink and context. NULL keeps serial execution. */
 typedef int (*mtp_copy_stream_reader)(mtp_client *,uint32_t,uint64_t,uint8_t *,size_t,mtp_download_consume,mtp_download_progress,void *,mtp_download_stats *,FILE *);
-int mtp_copy_run_streamed(mtp_client *,const mtp_copy_source *,const mtp_copy_sink *,mtp_copy_progress,void *,mtp_copy_result *,FILE *,int,mtp_copy_stream_reader);
+/* The result digest is SHA-256 of the received bytes in every mode.
+ * CRC64 checks the entire saved file for accidental corruption. */
+enum mtp_copy_verify { MTP_COPY_VERIFY_SHA256, MTP_COPY_VERIFY_SPARSE, MTP_COPY_VERIFY_CRC64 };
+int mtp_copy_run_streamed(mtp_client *,const mtp_copy_source *,const mtp_copy_sink *,mtp_copy_progress,void *,mtp_copy_result *,FILE *,enum mtp_copy_verify,mtp_copy_stream_reader);
 #endif

@@ -27,6 +27,7 @@
 #include "psmtp/device_watch.h"
 #include "psmtp/usb_label.h"
 #include "psmtp/usb_select.h"
+#include "android_accessory.h"
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,8 +136,8 @@ static int resume_connection(void *user){
 }
 static int bulk(ps4_io *io,uint8_t ep,uint8_t *buf,size_t n,size_t *actual,uint32_t timeout) {
     int32_t transferred=0,rc;int quiet=io->client && io->client->background_io;
-    if(((usb_stopping || psmtp_lifecycle_requested()) && quiet) ||
-       (psmtp_lifecycle_requested() && !usb_stopping && (!io->client || io->client->last_op!=0x1003))){*actual=0;return MTP_CANCELLED;}
+    if((usb_stopping || psmtp_lifecycle_requested()) &&
+       (quiet || !io->client || io->client->last_op!=0x1003)){*actual=0;return MTP_CANCELLED;}
     if(!quiet && (!io->client || !io->client->content_read)){
     fprintf(io->log,"stage=bulk begin endpoint=0x%02x requested=%zu timeout-ms=%" PRIu32 "\n",ep,n,timeout);
     fflush(io->log);}
@@ -379,6 +380,255 @@ static int close_connection(ps4_io *io,FILE *out){
     if(io->devices){io->api->free_list(io->devices,1);io->devices=NULL;}
     return rc;
 }
+
+/* Android Open Accessory data only. Identify and avoid an ADB interface. */
+static int accessory_device(const struct libusb_device_descriptor *d) {
+    return d->idVendor==0x18d1 && (d->idProduct==0x2d00 || d->idProduct==0x2d01);
+}
+
+static int accessory_claim(psmtp_android_accessory *out, libusb_device *device,
+                           const struct libusb_device_descriptor *descriptor, FILE *log) {
+    libusb_device_handle *handle=NULL;
+    uint8_t bytes[USB_MAX_CONFIG_BYTES];
+    usb_alt alternatives[USB_MAX_ALTS];
+    int32_t configuration;
+    int rc=MTP_UNSUPPORTED;
+    out->stage="opening the accessory";
+    out->native_status=runtime.api.open(device,&handle);
+    if(out->native_status || !handle) {
+        if(handle) runtime.api.close(handle);
+        return MTP_IO;
+    }
+    out->stage="reading the accessory configuration";
+    out->native_status=runtime.api.configuration(handle,&configuration);
+    if(out->native_status || configuration<=0 || configuration>255 ||
+       !descriptor->bNumConfigurations || descriptor->bNumConfigurations>8) goto done;
+    for(uint16_t i=0;i<descriptor->bNumConfigurations;++i) {
+        size_t count;
+        uint8_t value;
+        int32_t got=runtime.api.control(handle,0x80,6,(uint16_t)(0x200|i),0,bytes,9,250);
+        out->native_status=got;
+        if(got!=9 || bytes[0]!=9 || bytes[1]!=2) goto done;
+        if(bytes[5]!=configuration) continue;
+        uint16_t size=(uint16_t)(bytes[2]|(unsigned)bytes[3]<<8);
+        if(size<9 || size>sizeof(bytes)) goto done;
+        out->native_status=runtime.api.control(handle,0x80,6,(uint16_t)(0x200|i),0,bytes,size,250);
+        if(out->native_status!=size ||
+           usb_parse_config(bytes,size,alternatives,&count,&value) || value!=configuration) goto done;
+        out->stage="finding the accessory data interface";
+        out->native_status=0;
+        for(size_t j=0;j<count;++j) {
+            const usb_alt *alt=&alternatives[j];
+            uint8_t input=0,output=0;
+            fprintf(log,"stage=usb-aoa-interface index=%u alt=%u class=%02x/%02x/%02x endpoints=%zu\n",
+                alt->number,alt->alternate,alt->cls,alt->subclass,alt->protocol,alt->endpoint_count);
+            /* AOA is ff/ff/00. This excludes the ADB ff/42/01 interface
+             * even if the gadget assigns it interface zero. */
+            if(alt->alternate || alt->cls!=0xff || alt->subclass!=0xff || alt->protocol || alt->endpoint_count!=2) continue;
+            for(size_t endpoint=0;endpoint<alt->endpoint_count;++endpoint) {
+                const usb_endpoint *ep=&alt->endpoints[endpoint];
+                if((ep->attributes&3)!=2 || !(ep->address&15) || (ep->address&0x70) ||
+                   !ep->max_packet || ep->max_packet>1024) break;
+                if(ep->address&0x80) input=ep->address;
+                else output=ep->address;
+            }
+            if(!input || !output) goto done;
+            out->stage="claiming the accessory data interface";
+            out->native_status=runtime.api.claim(handle,alt->number);
+            if(out->native_status) {rc=MTP_IO;goto done;}
+            out->handle=handle;out->interface_number=alt->number;out->bulk_in=input;out->bulk_out=output;
+            fprintf(log,"stage=usb-aoa-claim interface=%u in=%02x out=%02x status=0\n",alt->number,input,output);
+            return MTP_OK;
+        }
+        break;
+    }
+done:
+    runtime.api.close(handle);
+    return rc;
+}
+
+static int accessory_switch(psmtp_android_accessory *out,libusb_device *device,FILE *log) {
+    static const char *const identity[]={"nueex", "PS MTP Explorer", "USB Direct Download", "2"};
+    libusb_device_handle *handle=NULL;
+    uint8_t version[2];
+    int rc=MTP_UNSUPPORTED;
+    out->stage="opening the phone";
+    out->native_status=runtime.api.open(device,&handle);
+    if(out->native_status || !handle) {
+        if(handle) runtime.api.close(handle);
+        return MTP_IO;
+    }
+    out->stage="querying Android accessory support";
+    out->native_status=runtime.api.control(handle,0xc0,51,0,0,version,sizeof(version),250);
+    fprintf(log,"stage=usb-aoa-control request=version result=%" PRId32 "\n",out->native_status);
+    if(out->native_status!=2 || !(version[0] || version[1])) goto done;
+    out->stage="sending the accessory identity";
+    for(uint16_t i=0;i<sizeof(identity)/sizeof(*identity);++i) {
+        uint16_t length=(uint16_t)(strlen(identity[i])+1);
+        out->native_status=runtime.api.control(handle,0x40,52,0,i,(unsigned char *)(uintptr_t)identity[i],length,250);
+        fprintf(log,"stage=usb-aoa-control request=identity index=%u result=%" PRId32 " expected=%u\n",i,out->native_status,length);
+        if(out->native_status!=length) goto done;
+    }
+    out->stage="waiting for Android accessory mode";
+    out->native_status=runtime.api.control(handle,0x40,53,0,0,NULL,0,500);
+    fprintf(log,"stage=usb-aoa-control request=start result=%" PRId32 "\n",out->native_status);
+    /* Re-enumeration can interrupt the control call. A failed START is
+     * accepted only when the expected accessory actually reappears. */
+    rc=MTP_OK;
+done:
+    runtime.api.close(handle);
+    return rc;
+}
+
+static int watched_mtp(const psmtp_device_record *key) {
+    for(size_t i=0;i<runtime.watch.count;++i) {
+        const psmtp_watched_device *entry=&runtime.watch.entries[i];
+        if(entry->mtp && entry->record.bus==key->bus && entry->record.address==key->address &&
+           entry->record.vendor==key->vendor && entry->record.product==key->product) return 1;
+    }
+    return 0;
+}
+
+static int same_usb_device(const psmtp_device_record *a,const psmtp_device_record *b) {
+    return a->signature && b->signature && a->bus==b->bus && a->address==b->address &&
+        a->vendor==b->vendor && a->product==b->product && a->signature==b->signature;
+}
+
+/* When the native library exposes no physical port path, switch one phone
+ * and accept only a one-for-one replacement in the pre-switch USB list. */
+static int accessory_replacement(const psmtp_device_record *before,const psmtp_device_record *after,
+                                 size_t count,size_t phone,size_t accessory) {
+    for(size_t i=0;i<count;++i) {
+        if(!before[i].signature || !after[i].signature) return 0;
+        int found=0;
+        for(size_t j=0;j<count;++j) {
+            if(j!=accessory && same_usb_device(before+i,after+j)) {found=1;break;}
+        }
+        if(found!=(i!=phone)) return 0;
+    }
+    return 1;
+}
+
+int psmtp_accessory_open(psmtp_android_accessory *out,int (*cancelled)(void *),void *user,FILE *log) {
+    int32_t (*ports)(libusb_device *,uint8_t *,int32_t)=NULL;
+    psmtp_device_record before[PSMTP_WATCH_MAX];
+    size_t count_before=0,phone=0;
+    uint8_t old_ports[8],bus=0;
+    int32_t depth=0;
+    uint64_t switched_at=0;
+    out->stage="preparing the PS4 USB service";
+    if(out->handle || runtime.active) return MTP_STATE;
+    if(cancelled(user)) return MTP_CANCELLED;
+    if(usb_ready(log)) return MTP_UNSUPPORTED;
+
+    for(;;) {
+        libusb_device **devices=NULL;
+        struct libusb_device_descriptor selected={0};
+        psmtp_device_record keys[PSMTP_WATCH_MAX]={0};
+        size_t candidate=0;
+        unsigned candidates=0;
+        int rc=MTP_DISCONNECTED;
+        if(cancelled(user)) return MTP_CANCELLED;
+        int64_t count=runtime.api.list(&devices);
+        if(count<0 || count>PSMTP_WATCH_MAX || (count && !devices)) {
+            if(devices) runtime.api.free_list(devices,1);
+            out->stage="listing USB devices";
+            return MTP_IO;
+        }
+        for(int64_t i=0;i<count;++i) {
+            struct libusb_device_descriptor d={0};
+            if(!devices[i] || runtime.api.descriptor(devices[i],&d) || d.bLength!=18 || d.bDescriptorType!=1) continue;
+            uint32_t signature=2166136261u;
+            const uint8_t *bytes=(const uint8_t *)&d;
+            for(size_t j=0;j<sizeof(d);++j) signature=(signature^bytes[j])*16777619u;
+            keys[i]=(psmtp_device_record){runtime.api.bus(devices[i]),runtime.api.address(devices[i]),d.idVendor,d.idProduct,signature};
+            int accessory=accessory_device(&d);
+            if(switched_at) {
+                uint8_t current[8];
+                if(!accessory) continue;
+                if(depth>0 && (keys[i].bus!=bus || ports(devices[i],current,sizeof(current))!=depth ||
+                   memcmp(old_ports,current,(size_t)depth))) continue;
+            } else {
+                fprintf(log,"stage=usb-aoa-device bus=%u address=%u vid=%04x pid=%04x accessory=%d\n",
+                    keys[i].bus,keys[i].address,d.idVendor,d.idProduct,accessory);
+                if(!accessory && !watched_mtp(&keys[i])) continue;
+            }
+            candidate=(size_t)i;selected=d;++candidates;
+        }
+        if(candidates>1) {
+            out->stage="choosing a single Android phone";
+            rc=MTP_STATE;
+        } else if(candidates && accessory_device(&selected)) {
+            if(!switched_at || depth>0 || ((size_t)count==count_before && accessory_replacement(before,keys,count_before,phone,candidate))) {
+                fprintf(log,"stage=usb-aoa-match method=%s bus=%u address=%u vid=%04x pid=%04x\n",
+                    !switched_at?"already-accessory":depth>0?"port":"topology",keys[candidate].bus,keys[candidate].address,selected.idVendor,selected.idProduct);
+                rc=accessory_claim(out,devices[candidate],&selected,log);
+            }
+        } else if(candidates) {
+            if(!resolve(runtime.module.handle,&ports,sizeof(ports),"sceUsbdGetPortNumbers",log)) {
+                bus=keys[candidate].bus;
+                depth=ports(devices[candidate],old_ports,sizeof(old_ports));
+                if(depth<0 || (size_t)depth>sizeof(old_ports)) depth=0;
+            }
+            count_before=(size_t)count;phone=candidate;
+            memcpy(before,keys,count_before*sizeof(*before));
+            fprintf(log,"stage=usb-aoa-selection method=%s bus=%u address=%u devices=%zu\n",
+                depth>0?"port":"topology",keys[phone].bus,keys[phone].address,count_before);
+            rc=accessory_switch(out,devices[candidate],log);
+            if(!rc) switched_at=now_ms(NULL);
+        } else if(!switched_at) {
+            out->stage="finding an Android phone in File Transfer mode";
+        }
+        if(out->handle) {
+            out->devices=devices;out->bus=keys[candidate].bus;out->address=keys[candidate].address;
+            return MTP_OK;
+        }
+        if(devices) runtime.api.free_list(devices,1);
+        if((rc!=MTP_DISCONNECTED && rc!=MTP_OK) || !switched_at) return rc;
+        if(now_ms(NULL)-switched_at>=7000) return MTP_TIMEOUT;
+#ifndef PSMTP_TEST_USB_RUNTIME
+        sceKernelUsleep(75000);
+#endif
+    }
+}
+
+int psmtp_accessory_transfer(psmtp_android_accessory *link,int sending,void *bytes,size_t n,size_t *got,uint32_t timeout) {
+    int32_t actual=0;
+    *got=0;
+    if(!link->handle || n>INT32_MAX) return MTP_STATE;
+    if(__atomic_load_n(&usb_stopping,__ATOMIC_ACQUIRE) || psmtp_lifecycle_requested()) return MTP_CANCELLED;
+    int32_t rc=runtime.api.bulk(link->handle,sending?link->bulk_out:link->bulk_in,bytes,(int32_t)n,&actual,timeout);
+    if(rc) link->native_status=rc;
+    if(actual<0 || (size_t)actual>n) return MTP_PROTOCOL;
+    *got=(size_t)actual;
+    return rc?MTP_IO:MTP_OK;
+}
+
+int psmtp_accessory_present(const psmtp_android_accessory *link) {
+    libusb_device **devices=NULL;
+    int rc=MTP_DISCONNECTED;
+    if(!link->handle) return MTP_STATE;
+    int64_t count=runtime.api.list(&devices);
+    if(count<0 || count>PSMTP_WATCH_MAX || (count && !devices)) rc=MTP_IO;
+    else for(int64_t i=0;i<count;++i) {
+        struct libusb_device_descriptor d={0};
+        if(!devices[i] || runtime.api.bus(devices[i])!=link->bus || runtime.api.address(devices[i])!=link->address) continue;
+        if(!runtime.api.descriptor(devices[i],&d) && accessory_device(&d)) rc=MTP_OK;
+        break;
+    }
+    if(devices) runtime.api.free_list(devices,1);
+    return rc;
+}
+
+int psmtp_accessory_close(psmtp_android_accessory *link) {
+    if(!link->handle) return MTP_OK;
+    int32_t released=runtime.api.release(link->handle,link->interface_number);
+    runtime.api.close(link->handle);
+    if(link->devices) runtime.api.free_list(link->devices,1);
+    memset(link,0,sizeof(*link));
+    return released?MTP_IO:MTP_OK;
+}
+
 int psmtp_ps4_diagnose(const psmtp_ps4_options *options,FILE *out) {
     usbd_api api;libusb_device **devices=NULL;libusb_device_handle *handle=NULL;
     int32_t count=0,rc;int64_t list_count;int claimed=0,result=1,index,alt_changed=0;uint8_t previous_alt=0;size_t n=0,i;

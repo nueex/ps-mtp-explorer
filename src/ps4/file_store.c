@@ -10,6 +10,7 @@
 #define _GNU_SOURCE
 #include "file_store.h"
 #include "psmtp/copy_paths.h"
+#include "psmtp/direct_download.h"
 #include "psmtp/ui_format.h"
 #include "stat_abi.h"
 #include <errno.h>
@@ -256,6 +257,7 @@ int psmtp_local_load(psmtp_local_browser *b,const char *path) {
         ++visited;errno=0;entry=readdir(d);if(!entry) {if(errno) {b->error=errno;b->error_stage="directory-read";}break;}
         if(!psmtp_dirent_valid(entry)) {b->error=EIO;b->error_stage="directory-record";break;}
         if(!strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+        if(!strcmp(safe,PSMTP_DOWNLOAD_DIRECTORY) && !strcmp(entry->d_name,PSMTP_DOWNLOAD_PART_NAME)) continue;
         if(staging && (!strcmp(entry->d_name,RECEIPT) || !strcmp(entry->d_name,COMPLETE) || !strcmp(entry->d_name,"transfer.part") || !strcmp(entry->d_name,"reserve.part"))) continue;
         if(entry->d_type && entry->d_type!=4 && entry->d_type!=8) {++b->skipped;continue;}
         if(store_join(child,safe,entry->d_name)) {++b->skipped;continue;}

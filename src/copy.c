@@ -66,9 +66,43 @@ static int capacity(const mtp_copy_sink *sink,uint64_t remaining) {
     if(e) return e;
     return available<remaining?MTP_LIMIT:0;
 }
+typedef uint64_t copy_crc64_table[8][256];
+
+/* CRC-64/XZ uses the reflected ECMA-182 polynomial. The eight tables
+ * combine the contributions of eight successive bytes in one step. */
+static void copy_crc64_init(copy_crc64_table table) {
+    for(unsigned byte=0;byte<256;++byte) {
+        uint64_t crc=byte;
+        for(unsigned bit=0;bit<8;++bit)
+            crc=(crc>>1)^((crc&1)?UINT64_C(0xc96c5795d7870f42):0);
+        table[0][byte]=crc;
+    }
+    for(unsigned slice=1;slice<8;++slice) {
+        for(unsigned byte=0;byte<256;++byte) {
+            uint64_t crc=table[slice-1][byte];
+            table[slice][byte]=table[0][crc&255]^(crc>>8);
+        }
+    }
+}
+
+static uint64_t copy_crc64_update(copy_crc64_table table,uint64_t crc,const uint8_t *data,size_t n) {
+    while(n>=8) {
+        crc^=(uint64_t)data[0]|(uint64_t)data[1]<<8|(uint64_t)data[2]<<16|(uint64_t)data[3]<<24|
+             (uint64_t)data[4]<<32|(uint64_t)data[5]<<40|(uint64_t)data[6]<<48|(uint64_t)data[7]<<56;
+        crc=table[7][crc&255]^table[6][(crc>>8)&255]^table[5][(crc>>16)&255]^table[4][(crc>>24)&255]^
+            table[3][(crc>>32)&255]^table[2][(crc>>40)&255]^table[1][(crc>>48)&255]^table[0][crc>>56];
+        data+=8;
+        n-=8;
+    }
+    while(n--) crc=table[0][(crc^*data++)&255]^(crc>>8);
+    return crc;
+}
+
 typedef struct {
     mtp_client *client;const mtp_copy_source *source;const mtp_copy_sink *sink;
     mtp_copy_progress progress;void *user;FILE *out;psmtp_sha256 sha;
+    copy_crc64_table *crc_table;
+    uint64_t crc;
     uint64_t offset,logged,guarded,phone_ms,write_ms,hash_ms,read_ms,sync_ms,ui_ms,guard_ms,writes,requests;
     uint8_t first[4];size_t first_n;psmtp_verify_capture *capture;int verify_error;
 } copy_context;
@@ -85,7 +119,10 @@ static int copy_consume(void *v,const uint8_t *data,size_t n){
     while(written<n){size_t actual=0;before=copy_now(x);rc=x->sink->write(x->sink->user,data+written,n-written,&actual);copy_elapsed(x,before,&x->write_ms);++x->writes;
         if(rc)return rc;if(!actual || actual>n-written)return MTP_IO;written+=actual;
     }
-    before=copy_now(x);psmtp_sha256_update(&x->sha,data,n);copy_elapsed(x,before,&x->hash_ms);x->offset+=n;
+    before=copy_now(x);
+    psmtp_sha256_update(&x->sha,data,n);
+    if(x->crc_table)x->crc=copy_crc64_update(*x->crc_table,x->crc,data,n);
+    copy_elapsed(x,before,&x->hash_ms);x->offset+=n;
     if(x->offset-x->guarded>=UINT64_C(1048576) || x->offset==x->source->size){before=copy_now(x);rc=capacity(x->sink,x->source->size-x->offset);copy_elapsed(x,before,&x->guard_ms);x->guarded=x->offset;if(rc)return rc;}
     if(x->offset-x->logged>=UINT64_C(67108864) || x->offset==x->source->size){if(x->out)fprintf(x->out,"stage=copy-progress phase=1 bytes=%" PRIu64 "/%" PRIu64 "\n",x->offset,x->source->size);x->logged=x->offset;}
     return 0;
@@ -93,22 +130,30 @@ static int copy_consume(void *v,const uint8_t *data,size_t n){
 static int copy_sparse_size(void *user,uint64_t *size){copy_context *x=user;int rc=x->sink->size(x->sink->user,size);if(rc)x->verify_error=rc;return rc?EIO:0;}
 static int copy_sparse_read(void *user,uint64_t at,uint8_t *data,size_t n,size_t *got){copy_context *x=user;int rc=x->sink->read_at(x->sink->user,at,data,n,got);if(rc)x->verify_error=rc;return rc?EIO:0;}
 static int copy_sparse_cancel(void *user,uint64_t done,uint64_t total){copy_context *x=user;(void)total;x->offset=done;return copy_report(x,MTP_COPY_LOCAL);}
-static int copy_run(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out,int quick,mtp_copy_stream_reader reader) {
+static int copy_run(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out,enum mtp_copy_verify verify,mtp_copy_stream_reader reader) {
     uint8_t *buf=NULL,hash[32];copy_context x={0};mtp_download_stats stream={0};
     psmtp_verify_capture capture={0};psmtp_verify_workspace local_workspace={0},*workspace=sink?sink->verify_workspace:NULL;
+    uint64_t received_crc=0;
+    int quick=verify==MTP_COPY_VERIFY_SPARSE;
     uint64_t started_ms=c->io.now_ms?c->io.now_ms(c->io.user):0,receive_ms=0,verify_ms=0,phase_start=0,before;size_t n,k;int e=0,phase=0,started=0,clean,used_stream=s->streamed;
     memset(result,0,sizeof(*result));x.client=c;x.source=s;x.sink=sink;x.progress=progress;x.user=user;x.out=out;
     if(!sink || !sink->begin || !sink->space || !sink->write || !sink->sync || !sink->rewind || !sink->read || !sink->publish || !sink->dispose)return MTP_STATE;
+    if(verify!=MTP_COPY_VERIFY_SHA256 && !quick && verify!=MTP_COPY_VERIFY_CRC64)return MTP_STATE;
     if(quick && (!sink->reopen_read || !sink->size || !sink->read_at))return MTP_STATE;
     buf=malloc(MTP_STREAM_CHUNK);if(!buf)return MTP_MEMORY;
     if(quick){if(psmtp_verify_capture_init(&capture,s->size)){e=MTP_MEMORY;goto done;}x.capture=&capture;
         if(!workspace){if(psmtp_verify_workspace_init(&local_workspace)){e=MTP_MEMORY;goto done;}workspace=&local_workspace;}}
+    if(verify==MTP_COPY_VERIFY_CRC64) {
+        x.crc_table=malloc(sizeof(*x.crc_table));
+        if(!x.crc_table){e=MTP_MEMORY;goto done;}
+        copy_crc64_init(*x.crc_table);
+    }
     e=recheck(c,s);if(e)goto done;started=1;e=sink->begin(sink->user,s);if(e)goto done;
     if(sink->prepare){phase=MTP_COPY_PREPARE;e=sink->prepare(sink->user,progress,user);if(e)goto done;e=recheck(c,s);if(e)goto done;}
     e=capacity(sink,s->size);if(e)goto done;
     if(out)fprintf(out,"stage=copy-path method=%s buffer=%u partial-chunk=%u\n",used_stream?"getobject-stream":"partial",MTP_STREAM_CHUNK,MTP_COPY_CHUNK);
     for(phase=MTP_COPY_RECEIVE;phase<=MTP_COPY_LOCAL;++phase){
-        psmtp_sha256_init(&x.sha);x.offset=x.logged=x.guarded=0;phase_start=copy_now(&x);
+        psmtp_sha256_init(&x.sha);x.crc=UINT64_MAX;x.offset=x.logged=x.guarded=0;phase_start=copy_now(&x);
         if(out)fprintf(out,"stage=copy-pass phase=%d total=%" PRIu64 "\n",phase,s->size);
         if(phase==MTP_COPY_LOCAL){before=copy_now(&x);e=sink->sync(sink->user);copy_elapsed(&x,before,&x.sync_ms);if(e)goto done;
             if(quick){psmtp_verify_source original=psmtp_verify_capture_source(&capture),destination={&x,copy_sparse_size,copy_sparse_read};enum psmtp_verify_status status;uint64_t compared=0;
@@ -140,15 +185,32 @@ static int copy_run(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *
                 else {e=mtp_get_partial(c,s->handle,x.offset,n,s->extended,buf,&k);copy_elapsed(&x,before,&x.phone_ms);++x.requests;}
                 if(e)goto done;if(!k || k>n){e=MTP_VERIFY;goto done;}
                 if(phase==MTP_COPY_RECEIVE){e=copy_consume(&x,buf,k);if(e)goto done;}
-                else {before=copy_now(&x);psmtp_sha256_update(&x.sha,buf,k);copy_elapsed(&x,before,&x.hash_ms);x.offset+=k;
+                else {before=copy_now(&x);
+                    if(x.crc_table)x.crc=copy_crc64_update(*x.crc_table,x.crc,buf,k);
+                    else psmtp_sha256_update(&x.sha,buf,k);
+                    copy_elapsed(&x,before,&x.hash_ms);x.offset+=k;
                     if(x.offset-x.logged>=UINT64_C(67108864) || x.offset==s->size){if(out)fprintf(out,"stage=copy-progress phase=2 bytes=%" PRIu64 "/%" PRIu64 "\n",x.offset,s->size);x.logged=x.offset;}}
             }
         }
         if(phase==MTP_COPY_RECEIVE && s->is_pkg && x.first_n<4){e=MTP_VERIFY;goto done;}
         if(phase==MTP_COPY_LOCAL && !quick){k=0;e=sink->read(sink->user,buf,1,&k);if(e)goto done;if(k){e=MTP_VERIFY;goto done;}}
-        psmtp_sha256_final(&x.sha,hash);
-        if(phase==MTP_COPY_RECEIVE){memcpy(result->digest,hash,32);copy_elapsed(&x,phase_start,&receive_ms);}
-        else {copy_elapsed(&x,phase_start,&verify_ms);if(!quick && memcmp(hash,result->digest,32)){e=MTP_VERIFY;goto done;}}
+        if(phase==MTP_COPY_RECEIVE){
+            psmtp_sha256_final(&x.sha,result->digest);
+            received_crc=x.crc;
+            copy_elapsed(&x,phase_start,&receive_ms);
+        }else{
+            int mismatch;
+            if(x.crc_table)mismatch=x.crc!=received_crc;
+            else{
+                psmtp_sha256_final(&x.sha,hash);
+                mismatch=memcmp(hash,result->digest,sizeof(hash))!=0;
+            }
+            copy_elapsed(&x,phase_start,&verify_ms);
+            if(mismatch){
+                if(out)fprintf(out,"stage=copy-readback-mismatch checksum=%s bytes=%" PRIu64 "\n",x.crc_table?"crc64":"sha256",x.offset);
+                e=MTP_VERIFY;goto done;
+            }
+        }
     }
     e=recheck(c,s);if(e)goto done;if(progress && progress(user,MTP_COPY_PUBLISH,s->size,s->size)){e=MTP_CANCELLED;goto done;}
     before=copy_now(&x);e=sink->sync(sink->user);copy_elapsed(&x,before,&x.sync_ms);if(e)goto done;e=sink->publish(sink->user,&result->published);
@@ -160,11 +222,11 @@ done:
         fprintf(out,"stage=copy-end status=%d phase=%d offset=%" PRIu64 " published=%d cleanup-failed=%d op=%04x response=%04x poisoned=%d\n",e,buf?phase:0,x.offset,result->published,result->cleanup_failed,c->last_op,c->response,c->poisoned);
         if(c->io.now_ms){uint64_t ended=copy_now(&x);fprintf(out,"stage=copy-timing bytes=%" PRIu64 " elapsed-ms=%" PRIu64 " receive-ms=%" PRIu64 " verify-ms=%" PRIu64 " status=%d\n",s->size,ended>=started_ms?ended-started_ms:0,receive_ms,verify_ms,e);}
         fprintf(out,"stage=copy-profile method=%s partial-requests=%" PRIu64 " usb-read-calls=%" PRIu64 " phone-ms=%" PRIu64 " writes=%" PRIu64 " write-ms=%" PRIu64 " hash-ms=%" PRIu64 " reread-ms=%" PRIu64 " sync-ms=%" PRIu64 " ui-ms=%" PRIu64 " guard-ms=%" PRIu64 "\n",used_stream?"getobject-stream":"partial",x.requests,stream.read_calls,x.phone_ms,x.writes,x.write_ms,x.hash_ms,x.read_ms,x.sync_ms,x.ui_ms,x.guard_ms);
-        if(!e && result->published){fputs("copy-sha256=",out);for(n=0;n<32;++n)fprintf(out,"%02x",result->digest[n]);fprintf(out," local-reread=%s phone-content-reads=1 verification=%s installation=not-started\n",quick?"sparse-match":"match",quick?"sparse-head-body-tail-size":"full-sha256-reread");}
+        if(!e && result->published){fputs("copy-sha256=",out);for(n=0;n<32;++n)fprintf(out,"%02x",result->digest[n]);fprintf(out," local-reread=%s phone-content-reads=1 verification=%s installation=not-started\n",quick?"sparse-match":"match",quick?"sparse-head-body-tail-size":x.crc_table?"full-crc64-reread":"full-sha256-reread");}
     }
-    psmtp_verify_capture_free(&capture);psmtp_verify_workspace_free(&local_workspace);free(buf);return e;
+    psmtp_verify_capture_free(&capture);psmtp_verify_workspace_free(&local_workspace);free(x.crc_table);free(buf);return e;
 }
 
-int mtp_copy_run(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out){return copy_run(c,s,sink,progress,user,result,out,0,NULL);}
-int mtp_copy_run_quick(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out){return copy_run(c,s,sink,progress,user,result,out,1,NULL);}
-int mtp_copy_run_streamed(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out,int quick,mtp_copy_stream_reader reader){return copy_run(c,s,sink,progress,user,result,out,quick,reader);}
+int mtp_copy_run(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out){return copy_run(c,s,sink,progress,user,result,out,MTP_COPY_VERIFY_SHA256,NULL);}
+int mtp_copy_run_quick(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out){return copy_run(c,s,sink,progress,user,result,out,MTP_COPY_VERIFY_SPARSE,NULL);}
+int mtp_copy_run_streamed(mtp_client *c,const mtp_copy_source *s,const mtp_copy_sink *sink,mtp_copy_progress progress,void *user,mtp_copy_result *result,FILE *out,enum mtp_copy_verify verify,mtp_copy_stream_reader reader){return copy_run(c,s,sink,progress,user,result,out,verify,reader);}

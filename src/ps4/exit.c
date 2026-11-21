@@ -58,7 +58,10 @@ void psmtp_ps4_exit(int status,FILE *log) {
     /* The diagnostic descriptor is already closed. A returned request cannot
      * prove termination; preserve the known-safe quiescent fallback instead
      * of returning to libc's unsafe raw _exit or killing a borrowed stack. */
-    if(!loaded){rc=sceSystemServiceLoadExec("exit",NULL);(void)rc;}
+    if(!loaded || psmtp_lifecycle_system_service_available()){
+        rc=sceSystemServiceLoadExec("exit",NULL);
+        (void)rc;
+    }
 
     for(;;) sceKernelUsleep(1000000);
 }

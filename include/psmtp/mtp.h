@@ -33,7 +33,8 @@ enum mtp_error {
     MTP_OK = 0, MTP_IO = -1, MTP_TIMEOUT = -2, MTP_DISCONNECTED = -3,
     MTP_PROTOCOL = -4, MTP_LIMIT = -5, MTP_MEMORY = -6, MTP_RESPONSE = -7,
     MTP_STATE = -8, MTP_UNSUPPORTED = -9, MTP_CANCELLED = -10, MTP_VERIFY = -11,
-    MTP_FILESYSTEM = -12, MTP_NO_SPACE = -13, MTP_SPACE_UNKNOWN = -14, MTP_EXISTS = -15
+    MTP_FILESYSTEM = -12, MTP_NO_SPACE = -13, MTP_SPACE_UNKNOWN = -14, MTP_EXISTS = -15,
+    MTP_NO_INTERNET = -16
 };
 /* Return an mtp_error; set actual even on failure. No transfer replay on error.
  * read() must accept packet-aligned MTP_RX_BYTES requests. now_ms is monotonic.

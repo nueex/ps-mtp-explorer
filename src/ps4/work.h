@@ -22,6 +22,8 @@ int psmtp_work_snapshot(psmtp_work *,psmtp_work_progress_state *);
 int psmtp_work_cancelled(psmtp_work *);
 int psmtp_work_source_state(void *,int *,unsigned *);
 void psmtp_work_cancel(psmtp_work *);
+/* The worker can defer a user cancel until a bounded MTP reply is consumed. */
+void psmtp_work_cancel_between_requests(psmtp_work *,int);
 void psmtp_work_shutdown(psmtp_work *);
 void psmtp_work_system(psmtp_work *,int,unsigned,int);
 int psmtp_work_pause_requested(psmtp_work *);

@@ -34,7 +34,12 @@ typedef struct {
     const char *error_stage;int error_number;
 } psmtp_op_plan;
 int psmtp_op_capture(psmtp_op_ref *,const psmtp_location *,const psmtp_local_entry *);
+int psmtp_op_open_read(const psmtp_op_ref *,int *);
+int psmtp_op_replace_text(psmtp_op_ref *,const char *,size_t);
+int psmtp_op_writable_directory(const psmtp_location *,const char *);
 int psmtp_op_plan_build(psmtp_op_plan *,const psmtp_op_ref *,mtp_client *,mtp_copy_progress,void *,FILE *);
+int psmtp_op_plan_delete(psmtp_op_plan *,const psmtp_op_ref *,mtp_client *,mtp_copy_progress,void *,FILE *);
+int psmtp_op_verify_phone_node(mtp_client *,const psmtp_op_node *);
 int psmtp_op_target(psmtp_op_plan *,const psmtp_location *,const char *);
 int psmtp_op_target_phone(psmtp_op_plan *,mtp_client *,const psmtp_location *,uint32_t,uint32_t);
 int psmtp_op_space(psmtp_op_plan *,mtp_client *);

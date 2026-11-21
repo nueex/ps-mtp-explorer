@@ -19,6 +19,7 @@ static inline int psmtp_lifecycle_requested(void){
 #endif
 }
 static inline void psmtp_lifecycle_poll(void){}
+static inline int psmtp_lifecycle_background(void){return 0;}
 static inline void psmtp_lifecycle_mark(const char *stage,int status){(void)stage;(void)status;}
 static inline void psmtp_lifecycle_transfer_state(int *pause,unsigned *epoch){*pause=0;*epoch=0;}
 static inline void psmtp_lifecycle_request_exit(void){}
@@ -30,6 +31,8 @@ int psmtp_lifecycle_requested(void);
 /* Normal worker failure intent; cleanup/exit remain on the UI owner. */
 void psmtp_lifecycle_request_exit(void);
 void psmtp_lifecycle_poll(void);
+int psmtp_lifecycle_background(void);
+int psmtp_lifecycle_system_service_available(void);
 void psmtp_lifecycle_transfer_state(int *,unsigned *);
 void psmtp_lifecycle_mark(const char *,int);
 void psmtp_lifecycle_close(void);

@@ -5,6 +5,7 @@
 #include <stddef.h>
 /* Native dialog owns separate UTF-16 buffers until Term succeeds. */
 int psmtp_ime_text(const char *,char *,size_t,int (*)(void *),void *,FILE *);
+int psmtp_ime_secret(const char *,char *,size_t,int (*)(void *),void *,FILE *);
 int psmtp_ime_busy(void);
 int psmtp_ime_shutdown(FILE *);
 #endif

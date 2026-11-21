@@ -15,7 +15,9 @@
 void psmtp_preferences_defaults(psmtp_preferences *p){memset(p,0,sizeof(*p));}
 static int valid(const psmtp_preferences *p){
     return p && (p->list_view==0 || p->list_view==1) && p->sort_mode>=0 &&
-        p->sort_mode<PSMTP_SORT_COUNT && (p->speed_boost==0 || p->speed_boost==1) && (p->install_mode==PSMTP_INSTALL_FAST || p->install_mode==PSMTP_INSTALL_PHONE_DIRECT);
+        p->sort_mode<PSMTP_SORT_COUNT && (p->speed_boost==0 || p->speed_boost==1) &&
+        (p->install_mode==PSMTP_INSTALL_FAST || p->install_mode==PSMTP_INSTALL_PHONE_DIRECT) &&
+        p->theme>=PSMTP_THEME_LIGHT && p->theme<PSMTP_THEME_COUNT;
 }
 static int field(const char **cursor,const char *key,unsigned limit,unsigned *value){
     const char *p=*cursor;size_t n=strlen(key);
@@ -28,13 +30,20 @@ static int field(const char **cursor,const char *key,unsigned limit,unsigned *va
     *cursor=p;return 0;
 }
 static int decode(psmtp_preferences *p,char *text,size_t size){
-    unsigned version,list,sort,boost,mode=0;const char *cursor=text;psmtp_preferences next;
+    unsigned version,list,sort,boost,mode=0,legacy_direct,theme=PSMTP_THEME_LIGHT;const char *cursor=text;psmtp_preferences next;
     if(memchr(text,0,size))return MTP_PROTOCOL;text[size]=0;
-    if(field(&cursor,"version=",2,&version) || (version!=1 && version!=2) ||
+    if(field(&cursor,"version=",5,&version) || version<1 ||
        field(&cursor,"list_view=",1,&list) || field(&cursor,"sort_mode=",PSMTP_SORT_COUNT-1,&sort) ||
        field(&cursor,"speed_boost=",1,&boost))return MTP_PROTOCOL;
-    if(version==2 && field(&cursor,"install_mode=",1,&mode))return MTP_PROTOCOL;if(*cursor)return MTP_PROTOCOL;
-    next.list_view=(int)list;next.sort_mode=(int)sort;next.speed_boost=(int)boost;next.install_mode=(int)mode;*p=next;return 0;
+    if(version>=2 && field(&cursor,"install_mode=",1,&mode))return MTP_PROTOCOL;
+    /* R4 saved this switch. Parse the old record without restoring it. */
+    if(version==3 && field(&cursor,"direct_download=",1,&legacy_direct))return MTP_PROTOCOL;
+    if(version==4){
+        if(field(&cursor,"theme=",1,&theme))return MTP_PROTOCOL;
+        if(theme==1)theme=PSMTP_THEME_CLASSIC;
+    }else if(version==5 && field(&cursor,"theme=",PSMTP_THEME_COUNT-1,&theme))return MTP_PROTOCOL;
+    if(*cursor)return MTP_PROTOCOL;
+    next.list_view=(int)list;next.sort_mode=(int)sort;next.speed_boost=(int)boost;next.install_mode=(int)mode;next.theme=(int)theme;*p=next;return 0;
 }
 int psmtp_preferences_load(psmtp_preferences *p,FILE *log){
     char bytes[PREFERENCE_BYTES+2];size_t length=0;int directory=-1,fd=-1,rc=0,error=0;psmtp_native_stat st;
@@ -61,7 +70,7 @@ done:
 int psmtp_preferences_save(const psmtp_preferences *p,FILE *log){
     char bytes[PREFERENCE_BYTES];int directory=-1,fd=-1,created=0,rc=MTP_FILESYSTEM,error=0,n;size_t written=0;
     if(!valid(p))return MTP_STATE;
-    n=snprintf(bytes,sizeof(bytes),"version=2\nlist_view=%d\nsort_mode=%d\nspeed_boost=%d\ninstall_mode=%d\n",p->list_view,p->sort_mode,p->speed_boost,p->install_mode);
+    n=snprintf(bytes,sizeof(bytes),"version=5\nlist_view=%d\nsort_mode=%d\nspeed_boost=%d\ninstall_mode=%d\ntheme=%d\n",p->list_view,p->sort_mode,p->speed_boost,p->install_mode,p->theme);
     if(n<0 || (size_t)n>=sizeof(bytes))return MTP_STATE;
     directory=psmtp_native_directory("/",PSMTP_PREFERENCES_DIRECTORY);
     if(directory<0 && errno==ENOENT){

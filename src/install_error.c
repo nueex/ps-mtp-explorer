@@ -27,10 +27,11 @@ static const error_record errors[]={
 static const error_record *find_error(uint32_t code){size_t i;for(i=0;i<sizeof(errors)/sizeof(*errors);++i)if(errors[i].code==code)return errors+i;return NULL;}
 enum psmtp_install_error_kind psmtp_install_error_kind(uint32_t code){const error_record *r=find_error(code);return r?r->kind:PSMTP_INSTALL_UNKNOWN;}
 const char *psmtp_install_error_name(uint32_t code){const error_record *r=find_error(code);return r?r->name:"UNCLASSIFIED_NATIVE_ERROR";}
-const char *psmtp_install_step_name(int step){static const char *names[]={"inspect","stage-copy","source-check","app-init","bgft-init","patch-base","register-storage","start","progress-query","progress-result","cleanup"};return step>=0 && (unsigned)step<sizeof(names)/sizeof(*names)?names[step]:"unknown";}
+const char *psmtp_install_step_name(int step){static const char *names[]={"inspect","stage-copy","source-check","app-init","bgft-init","patch-base","register-storage","start","progress-query","progress-result","cleanup","phone-transfer"};return step>=0 && (unsigned)step<sizeof(names)/sizeof(*names)?names[step]:"unknown";}
 const char *psmtp_install_failure_title(const psmtp_install_failure *f){
     if(f->base_missing)return "Base game not installed";
     if(!f->native_error && f->app_error==MTP_VERIFY && f->step==PSMTP_INSTALL_STAGE_COPY)return "Copied package verification failed";
+    if(!f->native_error && f->step==PSMTP_INSTALL_PHONE_TRANSFER)return "Phone package transfer failed";
     switch(psmtp_install_error_kind(f->native_error)){
     case PSMTP_INSTALL_INTEGRITY:return "Package integrity check failed";
     case PSMTP_INSTALL_READ_ERROR:return "Package read failed";
@@ -56,5 +57,6 @@ void psmtp_install_failure_text(const psmtp_install_failure *f,char *out,size_t 
     }
     if(f->native_error)snprintf(out,cap,"System installer error (0x%08x).\n%s\nSource PKG preserved.",f->native_error,advice);
     else if(f->app_error==MTP_VERIFY && f->step==PSMTP_INSTALL_STAGE_COPY)snprintf(out,cap,"The saved PKG failed full copy verification.\nInstallation was not started.\nSource PKG preserved.");
+    else if(f->step==PSMTP_INSTALL_PHONE_TRANSFER)snprintf(out,cap,"Could not deliver the PKG to the PS4 installer.\n%s (app error %d).\nSource PKG preserved.",mtp_error_string(f->app_error),f->app_error);
     else snprintf(out,cap,"Could not start installation:\n%s (app error %d).\nSource PKG preserved.",mtp_error_string(f->app_error),f->app_error);
 }

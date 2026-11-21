@@ -95,7 +95,11 @@ int psmtp_ime_shutdown(FILE *log){
     if(ime->owned){rc=sceSysmoduleUnloadModule(ORBIS_SYSMODULE_IME_DIALOG);if(rc){if(log)fprintf(log,"stage=ime-unload status=0x%08x\n",(unsigned)rc);return MTP_IO;}}
     free(ime);ime=NULL;return 0;
 }
-int psmtp_ime_text(const char *title,char *text,size_t capacity,int (*pump)(void *),void *user,FILE *log){
+static void clear_secret(void *value,size_t size){
+    volatile unsigned char *bytes=value;
+    while(size--)*bytes++=0;
+}
+static int ime_input(const char *title,char *text,size_t capacity,int (*pump)(void *),void *user,FILE *log,int secret){
     char result[256];int rc,running=0,last_state=-1;unsigned startup_polls=0,polls=0;int32_t native,user_id;ime_result status;
     if(!title || !text || capacity<2 || capacity>sizeof(result) || !memchr(text,0,capacity))return MTP_STATE;
     if(pump && pump(user))return MTP_CANCELLED;
@@ -105,17 +109,30 @@ int psmtp_ime_text(const char *title,char *text,size_t capacity,int (*pump)(void
     rc=encode(text,ime->text,255);
     if(rc){ime->text[0]=0;if(log)fprintf(log,"stage=ime-prefill-cleared status=%d names-in-log=0\n",rc);}
 
-    native=sceUserServiceGetInitialUser(&user_id);if(native || user_id<0)return MTP_IO;
+    native=sceUserServiceGetInitialUser(&user_id);
+    if(native || user_id<0){if(secret)clear_secret(ime->text,sizeof(ime->text));return MTP_IO;}
     ime->parameter.user=(uint32_t)user_id;ime->parameter.maximum=254;ime->parameter.text=ime->text;ime->parameter.title=ime->title;
+    if(secret){
+        /* The native dialog rejects Password with the default input type. */
+        ime->parameter.type=1; /* BasicLatin */
+        ime->parameter.option=4u|32u; /* Password, no learning. */
+    }
     ime->parameter.x=960.0f;ime->parameter.y=540.0f;ime->parameter.horizontal=1;ime->parameter.vertical=1;
     native=ime->init(&ime->parameter,NULL);if(log)fprintf(log,"stage=ime-init status=0x%08x max-utf16-units=254 centre=960,540 alignment=1,1 names-in-log=0\n",(unsigned)native);
-    if(native)return MTP_IO;ime->started=1;
+    if(native){if(secret)clear_secret(ime->text,sizeof(ime->text));return MTP_IO;}
+    ime->started=1;
     for(;;){int current=ime->status();++polls;
         if(current!=last_state){if(log)fprintf(log,"stage=ime-state status=%d poll=%u system-input-owner=1\n",current,polls);last_state=current;}
         if(current==2){memset(&status,0,sizeof(status));native=ime->result(&status);
             rc=native?MTP_IO:status.end?MTP_CANCELLED:decode(ime->text,256,result,capacity);
             if(log)fprintf(log,"stage=ime-result native=0x%08x end=%d result=%d names-in-log=0\n",(unsigned)native,status.end,rc);
-            if(finish(log))return MTP_IO;if(!rc)memcpy(text,result,strlen(result)+1);return rc;
+            if(finish(log)){if(secret)clear_secret(result,sizeof(result));return MTP_IO;}
+            if(!rc){
+                if(secret)clear_secret(text,capacity);
+                memcpy(text,result,strlen(result)+1);
+            }
+            if(secret){clear_secret(result,sizeof(result));clear_secret(ime->text,sizeof(ime->text));}
+            return rc;
         }
         /* The system dialog can enter RUNNING asynchronously. Keep checking
          * exit during a bounded initial NONE interval; the system owns input. */
@@ -128,4 +145,10 @@ int psmtp_ime_text(const char *title,char *text,size_t capacity,int (*pump)(void
         }
         sceKernelUsleep(16000);
     }
+}
+int psmtp_ime_text(const char *title,char *text,size_t size,int (*pump)(void *),void *user,FILE *log){
+    return ime_input(title,text,size,pump,user,log,0);
+}
+int psmtp_ime_secret(const char *title,char *text,size_t size,int (*pump)(void *),void *user,FILE *log){
+    return ime_input(title,text,size,pump,user,log,1);
 }

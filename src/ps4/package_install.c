@@ -59,6 +59,7 @@ struct psmtp_install_session {
     psmtp_copy_file staging;
     char url[512];FILE *log;uint32_t native_error;int install_step,base_missing;
     int direct;psmtp_phone_server *bridge;psmtp_phone_control control;void *control_user;
+    psmtp_phone_source stream;void (*release_stream)(void *);
     int direct_boost,direct_large_disabled;unsigned direct_fallbacks;size_t direct_chunk;uint64_t direct_read_calls,direct_read_bytes;
 };
 static psmtp_install_session *sessions;
@@ -76,6 +77,7 @@ void psmtp_install_stop(void){__atomic_store_n(&installer_stopping,1,__ATOMIC_RE
 static int stopped(psmtp_install_session *s){return __atomic_load_n(&installer_stopping,__ATOMIC_ACQUIRE) || __atomic_load_n(&s->stop,__ATOMIC_ACQUIRE);}
 static int same_stat(const psmtp_native_stat *a,const psmtp_native_stat *b){return a->st_dev==b->st_dev && a->st_ino==b->st_ino && a->st_gen==b->st_gen && a->st_mode==b->st_mode && a->st_size==b->st_size && !memcmp(&a->modify_time,&b->modify_time,sizeof(a->modify_time)) && !memcmp(&a->change_time,&b->change_time,sizeof(a->change_time));}
 static int source_check(psmtp_install_session *s){
+    if(s->stream.read)return s->stream.validate(s->stream.user);
     if(s->client){mtp_object_info info;uint64_t size;int rc=mtp_get_object_info(s->client,s->ref.handle,&info);if(rc)return rc;
         if(info.storage!=s->phone.info.storage || info.parent!=s->phone.info.parent || info.format!=s->phone.info.format || info.size32!=s->phone.info.size32 || strcmp(info.name,s->phone.info.name) || strcmp(info.modified,s->phone.info.modified))return MTP_VERIFY;
         if(s->phone.size_property){rc=mtp_get_object_size(s->client,s->ref.handle,&size);if(rc)return rc;if(size!=s->source.size)return MTP_VERIFY;}return 0;
@@ -147,6 +149,31 @@ int psmtp_install_prepare(psmtp_install_session **out,const psmtp_op_ref *ref,mt
 fail:
     (void)psmtp_install_close(s,0);return rc;
 }
+int psmtp_install_prepare_stream(psmtp_install_session **out,const char *name,const psmtp_phone_source *stream,
+    void (*retain)(void *),void (*release)(void *),FILE *log){
+    unsigned count=0;
+    int rc;
+    if(!out || !name || !stream || !stream->read || !stream->validate || !stream->available || !retain || !release)return MTP_STATE;
+    *out=NULL;
+    if(__atomic_load_n(&installer_stopping,__ATOMIC_ACQUIRE))return MTP_CANCELLED;
+    for(psmtp_install_session *at=sessions;at;at=at->next)++count;
+    if(count>=16 || strlen(name)>=sizeof(((psmtp_op_ref *)0)->name))return MTP_LIMIT;
+    if(!psmtp_pkg_name(name))return MTP_UNSUPPORTED;
+    psmtp_install_session *s=calloc(1,sizeof(*s));
+    if(!s)return MTP_MEMORY;
+    s->next=sessions;sessions=s;s->fd=s->pin=s->task=-1;s->log=log;s->direct=1;
+    s->stream=*stream;s->release_stream=release;retain(stream->user);
+    s->source=(psmtp_pkg_source){stream->user,stream->size,stream->read};
+    strcpy(s->ref.name,name);
+    s->install_step=PSMTP_INSTALL_INSPECT;
+    rc=psmtp_pkg_inspect(&s->source,&s->info);
+    if(!rc && !psmtp_pkg_install_title_allowed(s->info.title_id))rc=MTP_UNSUPPORTED;
+    if(rc){log_install_failure(s,rc);(void)psmtp_install_close(s,0);return rc;}
+    fprintf(log,"stage=usb-direct-install-inspect title-id=%.9s bytes=%" PRIu64 " install-bytes=%" PRIu64 "\n",
+        s->info.title_id,s->info.size,s->info.install_bytes);
+    *out=s;
+    return MTP_OK;
+}
 int psmtp_install_stage(psmtp_install_session **session,int confirmed,mtp_copy_progress progress,void *user){
     psmtp_install_session *s=session?*session:NULL,*local_session=NULL;psmtp_op_ref local={0};psmtp_pkg_info check;psmtp_copy_file *file;
     mtp_copy_source source;mtp_copy_sink sink;mtp_copy_result result;psmtp_native_stat st;uint64_t required;int rc,fd;
@@ -157,8 +184,9 @@ int psmtp_install_stage(psmtp_install_session **session,int confirmed,mtp_copy_p
     rc=psmtp_space_require("/","/data",required,s->log);if(rc)return rc;
     rc=source_check(s);if(rc)return rc;
     source=s->phone;source.is_pkg=1;file=&s->staging;psmtp_copy_file_init(file,s->log,&sink);s->temporary=1;
-    fprintf(s->log,"stage=install-copy begin bytes=%" PRIu64 " required=%" PRIu64 " network-init=0 source-delete=0 verify=sparse-head-body-tail-size\n",source.size,required);
-    rc=mtp_copy_run_streamed(s->client,&source,&sink,progress,user,&result,s->log,1,PSMTP_DOWNLOAD_READER);
+    sink.rewind=sink.reopen_read; /* Start the full readback on a fresh read-only descriptor. */
+    fprintf(s->log,"stage=install-copy begin bytes=%" PRIu64 " required=%" PRIu64 " network-init=0 source-delete=0 verify=full-crc64-reread\n",source.size,required);
+    rc=mtp_copy_run_streamed(s->client,&source,&sink,progress,user,&result,s->log,MTP_COPY_VERIFY_CRC64,PSMTP_DOWNLOAD_READER);
     fprintf(s->log,"stage=install-copy end status=%d published=%d cleanup-warning=%d saved=%s\n",rc,result.published,result.cleanup_failed,file->path);
     if(rc)return rc;if(!result.published || result.cleanup_failed || !file->directory_readable)return MTP_VERIFY;
     fd=open(file->path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);if(fd<0)return MTP_FILESYSTEM;
@@ -182,10 +210,17 @@ int psmtp_install_begin(psmtp_install_session *s,int confirmed){
     if(!s || !confirmed)return MTP_CANCELLED;if(stopped(s))return MTP_CANCELLED;if(s->owned || (s->client && !s->direct))return MTP_STATE;
     s->install_step=PSMTP_INSTALL_SOURCE_CHECK;
     rc=source_check(s);if(!rc)rc=psmtp_pkg_inspect(&s->source,&check);if(!rc && memcmp(&check,&s->info,sizeof(check)))rc=MTP_VERIFY;if(rc)return rc;
-    rc=psmtp_space_require("/","/data",s->info.install_bytes,s->log);if(rc)return rc;
+    uint64_t required=s->info.install_bytes;
+    if(s->stream.available){
+        uint64_t available=s->stream.available(s->stream.user);
+        if(available>s->source.size || s->source.size-available>UINT64_MAX-required)return MTP_LIMIT;
+        required+=s->source.size-available;
+    }
+    rc=psmtp_space_require("/","/data",required,s->log);if(rc)return rc;
     n=s->direct?0:snprintf(s->url,sizeof(s->url),"%s%s",!strncmp(s->ref.path,"/data/",6)?"/user":"",s->ref.path);
     if(n<0 || (size_t)n>=sizeof(s->url))return MTP_LIMIT;
-    fprintf(s->log,"stage=install-source transport=%s network-init=%d staging-copy=0\n",s->direct?"phone-loopback":"native-storage",s->direct);
+    const char *transport=s->stream.read?"usb-growing-file":s->direct?"phone-loopback":"native-storage";
+    fprintf(s->log,"stage=install-source transport=%s network-init=%d staging-copy=0\n",transport,s->direct);
     rc=service_init(s->log,&s->native_error,&s->install_step);if(rc){log_install_failure(s,rc);return rc;}if(stopped(s))return MTP_CANCELLED;
     if(s->info.patch){int32_t exists=-1,query=MTP_UNSUPPORTED;s->install_step=PSMTP_INSTALL_PATCH_BASE;
         if(service.app_exists)query=service.app_exists(s->info.title_id,&exists);
@@ -196,8 +231,9 @@ int psmtp_install_begin(psmtp_install_session *s,int confirmed){
     }
     rc=sceUserServiceGetInitialUser(&user);if(rc){s->native_error=(uint32_t)rc;return rc;}
     memset(&params,0,sizeof(params));params.user=user;params.entitlement=5;params.id=s->info.content_id;params.url=s->url;params.name=s->ref.name;params.icon="";params.scenario="0";params.type=s->info.package_type;params.subtype="";params.size=s->source.size;params.option=0x10000;
-    if(s->direct){int module=find_module("libSceBgft");psmtp_phone_source source={s,s->client,s->source.size,source_read,direct_validate,s->control,s->control_user,s->direct_chunk};
-        fprintf(s->log,"stage=install-phone-read speed-boost=%d mtp-request-max=%zu mode=buffered-range-pipeline\n",s->direct_boost,source.chunk_bytes);
+    if(s->direct){int module=find_module("libSceBgft");psmtp_phone_source source=s->stream.read?s->stream:
+            (psmtp_phone_source){s,s->client,s->source.size,source_read,direct_validate,s->control,s->control_user,s->direct_chunk,NULL};
+        if(!s->stream.read)fprintf(s->log,"stage=install-phone-read speed-boost=%d mtp-request-max=%zu mode=buffered-range-pipeline\n",s->direct_boost,source.chunk_bytes);
         service.url=NULL;s->install_step=PSMTP_INSTALL_REGISTER;
         if(symbol(module,s->info.patch?"sceBgftServiceIntDebugDownloadRegisterPkg":"sceBgftServiceIntDownloadRegisterTask",&service.url,sizeof(service.url))){log_install_failure(s,MTP_UNSUPPORTED);return MTP_UNSUPPORTED;}
         rc=psmtp_phone_server_open(&s->bridge,&source,s->url,sizeof(s->url),s->log);if(rc){log_install_failure(s,rc);return rc;}
@@ -205,7 +241,7 @@ int psmtp_install_begin(psmtp_install_session *s,int confirmed){
     s->install_step=PSMTP_INSTALL_REGISTER;
     {int32_t task=-1;
         if(s->direct)rc=service.url(&params,&task);else {install_storage_param local={0};local.param=params;local.slot=0;rc=service.storage(&local,&task);}
-        fprintf(s->log,"stage=install-register rc=0x%08x task=%d bytes=%" PRIu64 " phone=%d patch=%d transport=%s\n",(unsigned)rc,task,s->source.size,s->client!=NULL,s->info.patch,s->direct?"phone-loopback":"native-storage");
+        fprintf(s->log,"stage=install-register rc=0x%08x task=%d bytes=%" PRIu64 " phone=%d patch=%d transport=%s\n",(unsigned)rc,task,s->source.size,s->client!=NULL,s->info.patch,transport);
         /* A failed registration can return someone else's existing task ID. */
         if(rc){s->native_error=(uint32_t)rc;log_install_failure(s,rc);return rc;}if(task<0)return MTP_PROTOCOL;s->task=task;s->owned=1;}
     if(stopped(s))return MTP_CANCELLED;
@@ -213,8 +249,8 @@ int psmtp_install_begin(psmtp_install_session *s,int confirmed){
 }
 int psmtp_install_poll(psmtp_install_session *s,psmtp_install_report *report){
     install_progress p;int32_t rc;memset(report,0,sizeof(*report));report->task=s->task;report->source_error=__atomic_load_n(&s->source_error,__ATOMIC_ACQUIRE);
-    if(report->source_error)return report->source_error;
-    if(s->bridge){psmtp_phone_server_log(s->bridge,s->log);report->source_error=psmtp_phone_server_error(s->bridge);report->requests=psmtp_phone_server_requests(s->bridge);if(report->source_error)return report->source_error;}
+    if(s->bridge){psmtp_phone_server_log(s->bridge,s->log);if(!report->source_error)report->source_error=psmtp_phone_server_error(s->bridge);report->requests=psmtp_phone_server_requests(s->bridge);}
+    if(report->source_error){s->install_step=s->direct?PSMTP_INSTALL_PHONE_TRANSFER:PSMTP_INSTALL_SOURCE_CHECK;log_install_failure(s,report->source_error);return report->source_error;}
     if(!s->client && !s->background){rc=source_check(s);if(rc)return rc;}
     if(!s->owned)return MTP_STATE;
     s->install_step=PSMTP_INSTALL_PROGRESS_QUERY;memset(&p,0,sizeof(p));rc=service.progress(s->task,&p);report->native_error=rc?(uint32_t)rc:(uint32_t)p.error;
@@ -224,6 +260,7 @@ int psmtp_install_poll(psmtp_install_session *s,psmtp_install_report *report){
     /* Firmware can update aggregate bytes or local-copy percent while the
      * per-part transferred counter stays zero. Use real system values only. */
     report->done=p.total?p.total_transferred:p.transferred;report->total=p.total?p.total:p.length;
+    report->copy_percent=p.copy;
     if(p.copy>0 && p.copy<=100)s->copy_seen=1;
     if(report->total){report->percent=(int)((long double)report->done*100/report->total);report->progress_known=1;}
     /* The native copy substage can already be 100 while aggregate bytes are
@@ -233,7 +270,8 @@ int psmtp_install_poll(psmtp_install_session *s,psmtp_install_report *report){
     if(report->preparing){report->percent=p.preparing;report->progress_known=1;}
     if(report->preparing!=s->last_preparing || (report->total!=0)!=s->last_bytes_known){s->last_percent=0;s->last_preparing=report->preparing;s->last_bytes_known=report->total!=0;}
     if(report->percent>100)report->percent=100;
-    if(p.length && p.transferred>=p.length && (!p.total || p.total_transferred>=p.total) && (!s->copy_seen || p.copy==100) && (!s->background || p.copy==100)){
+    if(p.length && p.transferred>=p.length && (!p.total || p.total_transferred>=p.total) && (!s->copy_seen || p.copy==100) && (!s->background || p.copy==100) &&
+        (!s->stream.available || s->stream.available(s->stream.user)==s->source.size)){
         s->complete=report->complete=1;report->percent=100;report->progress_known=1;
     }else if(report->percent>=100)report->percent=99;
     if(report->progress_known){if(report->percent<s->last_percent)report->percent=s->last_percent;else s->last_percent=report->percent;}
@@ -268,8 +306,9 @@ int psmtp_install_close_report(psmtp_install_session *s,int cancel,uint32_t *nat
     else if(s->temporary && s->log)fputs("stage=install-staging retained=1 task-still-registered=1\n",s->log);
     if(s->fd>=0 && close(s->fd))rc=MTP_FILESYSTEM;if(s->pin>=0 && close(s->pin))rc=MTP_FILESYSTEM;
     if(s->log)fprintf(s->log,"stage=install-end task=%d delivered=%d staging-removed=%d original-source-removed=0 network-init=%d native=0x%08x\n",s->task,s->complete,s->source_removed,s->direct,s->native_error);
-    if(s->direct && s->log)fprintf(s->log,"stage=install-phone-read-end buffered-calls=%" PRIu64 " buffered-bytes=%" PRIu64 " selected-request=%zu clean-size-rejection-fallbacks=%u\n",s->direct_read_calls,s->direct_read_bytes,s->direct_chunk,s->direct_fallbacks);
+    if(s->client && s->direct && s->log)fprintf(s->log,"stage=install-phone-read-end buffered-calls=%" PRIu64 " buffered-bytes=%" PRIu64 " selected-request=%zu clean-size-rejection-fallbacks=%u\n",s->direct_read_calls,s->direct_read_bytes,s->direct_chunk,s->direct_fallbacks);
     if(native_error && !*native_error)*native_error=s->native_error;
+    if(s->release_stream)s->release_stream(s->stream.user);
     while(*link && *link!=s)link=&(*link)->next;if(*link)*link=s->next;
     free(s);return rc;
 }
@@ -277,7 +316,7 @@ int psmtp_install_close(psmtp_install_session *s,int cancel){return psmtp_instal
 int psmtp_install_close_session(psmtp_install_session **owner,int cancel,uint32_t *native){psmtp_install_session *at,*s=owner?*owner:NULL;int rc=psmtp_install_close_report(s,cancel,native);if(owner){for(at=sessions;at && at!=s;at=at->next){}if(!at)*owner=NULL;}return rc;}
 int psmtp_install_handoff(psmtp_install_session **session,psmtp_install_report *report){
     psmtp_install_session *s=session?*session:NULL;int warning=0;
-    if(!s || !report || !s->owned || !s->started || s->client || s->background)return MTP_STATE;
+    if(!s || !report || !s->owned || !s->started || s->client || s->stream.read || s->background)return MTP_STATE;
     /* BGFT uses a native storage path, never an application callback. No USB,
      * borrowed stack, worker cookie or process-root descriptor is handed off. */
     s->background=1;

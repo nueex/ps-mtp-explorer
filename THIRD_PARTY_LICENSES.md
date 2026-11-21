@@ -2,7 +2,7 @@
 
 **Original-work migration (2026-10-26):** Original Author: nueex — Copyright (C) 2026 nueex. Only nueex's original work is now offered under GPL-3.0-or-later; see [LICENSING.md](LICENSING.md) and [LICENSE_SCOPE.json](LICENSE_SCOPE.json). Third-party terms remain unchanged. The complete application is not cleared for redistribution: libjbc and excluded third-party artwork/branding still require resolution. See [LICENSING.md](LICENSING.md). Attribution and source availability alone do not establish redistribution permission. The [historical MIT grant](LICENSES/MIT-legacy.txt) remains effective for previously licensed material.
 
-PS MTP Explorer includes third-party components with their own terms. This file does not relicense those components. License texts and corresponding OpenOrbis runtime materials are provided in `PS-MTP-Explorer-2.0.0-Third-Party.zip` alongside the compiled release. Application source is not included in that archive.
+PS MTP Explorer includes third-party components with their own terms. This file does not relicense those components. The release's third-party archive contains license texts and corresponding OpenOrbis runtime materials. Application source is not included in that archive.
 
 | Component | Attribution and terms |
 | :--- | :--- |
@@ -10,6 +10,8 @@ PS MTP Explorer includes third-party components with their own terms. This file 
 | PS4 musl libc | Rich Felker and contributors; MIT and component notices. Statically linked runtime and startup code from the OpenOrbis SDK. |
 | stb_image / stb_truetype | Sean Barrett and contributors; MIT or public-domain options as stated in the bundled upstream headers. |
 | Noto Sans Light | Google and Noto Project contributors; SIL Open Font License 1.1. Font notices are retained. |
+| Urbanist Regular | Corey Hu, [upstream revision 5497164](https://github.com/coreyhu/Urbanist/tree/549716453f76335ccc5a9e537cbe0da03d6fed34). [SIL Open Font License 1.1](assets/fonts/Urbanist-OFL.txt). |
+| Mozilla public CA bundle | [curl's 2026-11-05 conversion of Mozilla's root store](https://curl.se/ca/cacert-2026-11-05.pem), distributed under the [Mozilla Public License 2.0](third_party/mozilla-ca/LICENSE.txt). The original PEM is included in source and verified against its published SHA-256 at build time. |
 | libjbc | sleirsgoevy, with modifications by bucanero. The pinned bucanero/ps4-libjbc snapshot is `835fe016ff0ae5dd89b9249f39cc0fe093fd07dd`. That upstream snapshot does not contain a standalone license file; no MIT/GPL license is assigned to it here. |
 | OpenOrbis-derived linker script | `src/ps4/link.x` retains its existing `GPL-3.0-only` identifier and upstream derivation notice. It is not covered by the project's MIT grant, and is not changed to GPL-3.0-or-later. |
 | Artwork and wordmarks | Project-specific original launcher/title artwork and authored UI graphics are covered by nueex's scoped GPL grant following the ownership confirmation. The PS4/Sony logo, Bloodborne cover, unresolved demo scenery and other third-party elements remain excluded. The platform SVG and screenshot are mixed works. See [assets/reference/NOTICE.txt](assets/reference/NOTICE.txt) and [LICENSING_ASSETS.json](LICENSING_ASSETS.json); no project MIT/GPL grant is asserted for external elements. |
@@ -46,4 +48,8 @@ The compiled image decoder is now the repository-owned
   using the header's checked arithmetic, without editing the header or
   enabling extra decoders. Remove the integration helper when upstream fixes
   its definition guard.
+
+## FAAD2
+
+The PS4 player uses FAAD2 2.11.4 for AAC audio. Code from FAAD2 is copyright (c) Nero AG, www.nero.com. The build verifies the source archive and packages its GPL-2.0-or-later notice. [FAAD2 source and license](https://github.com/knik0/faad2/tree/2.11.4)
 

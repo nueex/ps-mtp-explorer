@@ -143,5 +143,7 @@ void psmtp_preview_frame(const psmtp_location *location,const mtp_navigator *pho
      * Do not even inspect mutable client state while that worker owns it. */
     if(!allow || __atomic_load_n(&preview.stop,__ATOMIC_ACQUIRE) || !preview.started || now-preview.last_change<200 || state() || (phone && !psmtp_preview_phone_busy() && phone->client->poisoned))return;
     for(k=0;k<=limit;++k){size_t index=k?first+k-1:selected;if(index>=count || make_request(index,&r) || find(r.key) || negative_find(r.identity))continue;
-        if(!r.folder && !strcmp(psmtp_ui_kind(r.name,0),"File"))continue;preview.job=r;__atomic_store_n(&preview.cancel,0,__ATOMIC_RELEASE);__atomic_store_n(&preview.state,1,__ATOMIC_RELEASE);psmtp_sync_notify(&preview.changed);break;}
+        psmtp_file_kind kind=psmtp_ui_file_kind(r.name,r.folder);
+        if(kind!=PSMTP_KIND_FOLDER && kind!=PSMTP_KIND_PACKAGE && kind!=PSMTP_KIND_IMAGE && kind!=PSMTP_KIND_VIDEO)continue;
+        preview.job=r;__atomic_store_n(&preview.cancel,0,__ATOMIC_RELEASE);__atomic_store_n(&preview.state,1,__ATOMIC_RELEASE);psmtp_sync_notify(&preview.changed);break;}
 }

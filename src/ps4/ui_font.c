@@ -22,9 +22,10 @@
 #pragma clang diagnostic pop
 #endif
 #include "font_data.inc"
+#include "theme_font_data.inc"
 #define GLYPHS 768
-typedef struct { uint32_t code; int px,w,h,x,y,advance; uint64_t used; unsigned char *alpha; } glyph;
-static struct { stbtt_fontinfo info; glyph cache[GLYPHS]; uint64_t clock; int ready; } font;
+typedef struct { uint32_t code; int px,w,h,x,y,advance,face; uint64_t used; unsigned char *alpha; } glyph;
+static struct { stbtt_fontinfo info[2]; glyph cache[GLYPHS]; uint64_t clock; int ready,face; } font;
 static unsigned quick[2048];
 static uint32_t next(const unsigned char **text) {
     const unsigned char *p=*text; uint32_t c; unsigned n,i;
@@ -42,30 +43,34 @@ static uint32_t next(const unsigned char **text) {
 }
 int psmtp_font_init(void) {
     if(font.ready) return 0;
-    if(!stbtt_InitFont(&font.info,psmtp_font_data,0)) return -1;
+    if(!stbtt_InitFont(&font.info[0],psmtp_font_data,0) || !stbtt_InitFont(&font.info[1],psmtp_theme_font_data,0)) return -1;
     font.ready=1; return 0;
 }
+void psmtp_font_theme(int geometric){font.face=!!geometric;}
 void psmtp_font_close(void) {
     unsigned i; for(i=0;i<GLYPHS;++i) free(font.cache[i].alpha);
     memset(&font,0,sizeof(font));
     memset(quick,0,sizeof(quick));
 }
 static glyph *lookup(uint32_t code,int px) {
-    unsigned i,slot=0,hash=(code*31u+(unsigned)px*131u)%2048; float scale; int advance,left,index;
+    unsigned i,slot=0,hash=(code*31u+(unsigned)px*131u+509u*(unsigned)font.face)%2048;
+    float scale; int advance,left,index,face=font.face;
     glyph *g;
     if(!font.ready && psmtp_font_init()) return NULL;
-    if(quick[hash]) {g=&font.cache[quick[hash]-1];if(g->used && g->code==code && g->px==px){g->used=++font.clock;return g;}}
+    if(quick[hash]) {g=&font.cache[quick[hash]-1];if(g->used && g->code==code && g->px==px && g->face==face){g->used=++font.clock;return g;}}
     for(i=0;i<GLYPHS;++i) {
-        if(font.cache[i].used && font.cache[i].code==code && font.cache[i].px==px) { font.cache[i].used=++font.clock;quick[hash]=i+1; return &font.cache[i]; }
+        if(font.cache[i].used && font.cache[i].code==code && font.cache[i].px==px && font.cache[i].face==face) { font.cache[i].used=++font.clock;quick[hash]=i+1; return &font.cache[i]; }
         if(font.cache[i].used<font.cache[slot].used) slot=i;
     }
     g=&font.cache[slot]; free(g->alpha); memset(g,0,sizeof(*g));
-    index=stbtt_FindGlyphIndex(&font.info,(int)code);
-    if(!index) index=stbtt_FindGlyphIndex(&font.info,0xfffd);
-    scale=stbtt_ScaleForMappingEmToPixels(&font.info,(float)px);
-    stbtt_GetGlyphHMetrics(&font.info,index,&advance,&left);
-    g->alpha=stbtt_GetGlyphBitmap(&font.info,scale,scale,index,&g->w,&g->h,&g->x,&g->y);
-    g->advance=(int)(advance*scale+0.5f); g->code=code; g->px=px; g->used=++font.clock;
+    stbtt_fontinfo *info=&font.info[face];
+    index=stbtt_FindGlyphIndex(info,(int)code);
+    if(!index && face){info=&font.info[0];index=stbtt_FindGlyphIndex(info,(int)code);}
+    if(!index) index=stbtt_FindGlyphIndex(info,0xfffd);
+    scale=stbtt_ScaleForMappingEmToPixels(info,(float)px);
+    stbtt_GetGlyphHMetrics(info,index,&advance,&left);
+    g->alpha=stbtt_GetGlyphBitmap(info,scale,scale,index,&g->w,&g->h,&g->x,&g->y);
+    g->advance=(int)(advance*scale+0.5f); g->code=code; g->px=px; g->face=face;g->used=++font.clock;
     quick[hash]=slot+1;
     return g;
 }

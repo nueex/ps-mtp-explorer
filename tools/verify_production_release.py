@@ -50,9 +50,16 @@ patterns = [rb'stage=', rb'(?i)[a-z]:[\\/]Users[\\/]', rb'(?i)/(?:Users|home)/',
             rb'EXPERIMENTAL USB ABI', rb'PSMTP_(?:TEST_|PS4_EXIT_TEST_ONLY|PS4_DISCOVERY_ONLY)',
             rb'AddressSanitizer', rb'UndefinedBehaviorSanitizer', rb'HOST PREVIEW', rb'QA phone', rb'MOCK phone']
 scanned = {}
+deletable_logs = [b'/data/psmtp/psmtp-' + kind + b'.log' for kind in (b'scan', b'diag', b'shutdown')]
 for name in PACKAGE_FILES:
     path = payload/name
     data = path.read_bytes()
+    if name == 'eboot.bin':
+        # The browser recognizes these exact files for manual deletion.
+        # Keep rejecting log prefixes elsewhere and diagnostic writers below.
+        for log_path in deletable_logs:
+            assert data.count(log_path + b'\0') == 1, log_path
+            data = data.replace(log_path + b'\0', b'\0')
     for pattern in patterns:
         assert not re.search(pattern, data), (name, pattern)
     scanned[name] = sha(path)
@@ -61,7 +68,12 @@ identity = validate_package_identity(pkg,sfo)
 assert sha(pkg) == report['package']['sha256'] and report['package']['round_trip_verified']
 imports = json.loads((base/'structure-report.json').read_text())['elf']['imports']
 exit_check = application_exit_imports(imports)
-assert not any('sceNet' in name for name in imports)
+network_imports = {name for name in imports if name.startswith('sceNet')}
+lan_imports = {'sceNetAccept', 'sceNetBind', 'sceNetCtlGetInfo', 'sceNetCtlInit', 'sceNetCtlTerm',
+               'sceNetErrnoLoc', 'sceNetInetPton', 'sceNetInit', 'sceNetListen', 'sceNetPoolCreate',
+               'sceNetPoolDestroy', 'sceNetRecv', 'sceNetSend', 'sceNetSetsockopt', 'sceNetSocket',
+               'sceNetSocketClose', 'sceNetTerm'}
+assert network_imports <= (lan_imports if 'src/ps4/lan_server.c' in report['compiled_sources'] else set()), network_imports
 assert not {'fopencookie', 'fprintf', 'fputs', 'fputc'} & set(imports)
 program = (payload/'eboot.bin').read_bytes()
 assert RELEASE.encode()+b'\0' in program
@@ -75,12 +87,14 @@ assert b'psmtp_jbc_setuid\0' not in credential_object and b'k_prison_ref\0' not 
 result = {'release': RELEASE, 'title_id': TITLE_ID, 'content_id': CONTENT_ID,
           'app_version': sfo['APP_VER'], 'metadata_matches_display_version': True,
           'production': True, 'diagnostic_logging': False, 'debug_sections_absent': True,
-          'private_paths_absent': True, 'test_payloads_absent': True, 'network_imports_absent': True,
+          'private_paths_absent': True, 'test_payloads_absent': True, 'network_imports_absent': not network_imports,
+          'network_import_allowlist_passed': True, 'network_imports': sorted(network_imports),
           'payload_sha256': scanned, 'package_sha256': sha(pkg),
           'package_round_trip_verified': True, 'identity_validation': identity,
           'dialog_controls_validation': dialog_controls,
           'shutdown_components_present': True, 'shutdown_native_symbols': native_symbols,
           'exit_import_check': exit_check, 'credential_copy_experiment_absent': True,
-          'persistent_diagnostic_paths_absent': True, 'hardware_tested': False}
+          'deletable_diagnostic_logs': [path.decode() for path in deletable_logs],
+          'persistent_diagnostic_paths_absent': False, 'hardware_tested': False}
 (base/'production-audit.json').write_text(json.dumps(result, indent=2)+'\n')
-print('PASS: production identity/version, payload allowlist, hashes, no debug sections/logs/personal paths/test payloads/network imports')
+print('PASS: production identity/version, payload and network imports, hashes, diagnostic writers disabled, no private paths or test payloads')

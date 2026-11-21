@@ -5,7 +5,7 @@
 #include <stdio.h>
 typedef struct psmtp_phone_server psmtp_phone_server;
 typedef int (*psmtp_phone_control)(void *,int *,unsigned *);
-typedef struct {void *user;mtp_client *client;uint64_t size;int (*read)(void *,uint64_t,uint8_t *,size_t);int (*validate)(void *);psmtp_phone_control control;void *control_user;size_t chunk_bytes;} psmtp_phone_source;
+typedef struct {void *user;mtp_client *client;uint64_t size;int (*read)(void *,uint64_t,uint8_t *,size_t);int (*validate)(void *);psmtp_phone_control control;void *control_user;size_t chunk_bytes;uint64_t (*available)(void *);} psmtp_phone_source;
 /* Optional, dynamically resolved network APIs. Bind loopback only; 4 HTTP
  * consumers share one serialized MTP transport and bounded chunk buffers. */
 int psmtp_phone_server_open(psmtp_phone_server **,const psmtp_phone_source *,char *,size_t,FILE *);

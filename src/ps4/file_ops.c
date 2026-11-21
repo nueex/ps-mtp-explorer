@@ -18,6 +18,9 @@
 #include "psmtp/ui_format.h"
 #include "psmtp/name.h"
 #include "psmtp/navigator.h"
+#include "psmtp/pkg.h"
+#include "psmtp/direct_download.h"
+#include "psmtp/log_paths.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,15 +61,22 @@ static int ops_join(char *out,const char *parent,const char *name) {
 static int ops_below(const char *path,const char *root) {
     size_t n=strlen(root);return !strncmp(path,root,n) && (!path[n] || path[n]=='/');
 }
+static int ops_app_log(const char *path) {
+    return !strcmp(path,PSMTP_SCAN_LOG_PATH) || !strcmp(path,PSMTP_DIAGNOSTIC_LOG_PATH) ||
+           !strcmp(path,PSMTP_SHUTDOWN_LOG_PATH);
+}
 static int ops_write_area(const char *path,int removing) {
     if(ops_below(path,"/data")) {
         if(removing && (!strcmp(path,"/data") || !strcmp(path,"/data/psmtp"))) return 0;
-        if(ops_below(path,"/data/psmtp") && !ops_below(path,"/data/psmtp/copies")) return 0;
-        if(removing && !strcmp(path,"/data/psmtp/copies")) return 0;
+        if(ops_below(path,"/data/psmtp") && !ops_below(path,"/data/psmtp/copies") && !ops_below(path,PSMTP_DOWNLOAD_DIRECTORY)) return 0;
+        if(removing && (!strcmp(path,"/data/psmtp/copies") || !strcmp(path,PSMTP_DOWNLOAD_DIRECTORY))) return 0;
         return 1;
     }
     if(strlen(path)>=9 && !strncmp(path,"/mnt/usb",8) && path[8]>='0' && path[8]<='7' && (!path[9] || path[9]=='/')) return !removing || path[9];
     return 0;
+}
+static int ops_delete_allowed(const char *path,int folder,int verified_move) {
+    return ops_write_area(path,1) || (!folder && !verified_move && ops_app_log(path));
 }
 static int ops_same(const psmtp_native_stat *a,const psmtp_native_stat *b,int full) {
     if(a->st_dev!=b->st_dev || a->st_ino!=b->st_ino || (a->st_mode&S_IFMT)!=(b->st_mode&S_IFMT) || a->st_gen!=b->st_gen) return 0;
@@ -106,6 +116,66 @@ int psmtp_op_capture(psmtp_op_ref *out,const psmtp_location *location,const psmt
     if(!rc && (out->folder?!S_ISDIR(out->native.st_mode):!S_ISREG(out->native.st_mode))) rc=MTP_VERIFY;
     return rc;
 }
+#ifndef PSMTP_TEST_FILE_SYSTEM
+int psmtp_op_writable_directory(const psmtp_location *location,const char *path) {
+    if(location->kind==PSMTP_LOCATION_PHONE || !ops_write_area(path,0)){errno=EROFS;return -1;}
+    return psmtp_native_directory(location->root,path);
+}
+
+int psmtp_op_open_read(const psmtp_op_ref *source,int *out) {
+    psmtp_native_stat actual;
+    *out=-1;
+    if(source->folder || source->location.kind==PSMTP_LOCATION_PHONE)return MTP_UNSUPPORTED;
+    int fd=ops_open(source->location.root,source->path,O_RDONLY);
+    if(fd<0)return MTP_FILESYSTEM;
+    int rc=psmtp_native_status(fd,&actual);
+    if(!rc && !ops_same(&actual,&source->native,1))rc=MTP_VERIFY;
+    if(rc)close(fd);else *out=fd;
+    return rc;
+}
+
+int psmtp_op_replace_text(psmtp_op_ref *source,const char *data,size_t length) {
+    psmtp_native_stat updated,parent_stat;
+    char folder[PSMTP_LOCAL_PATH],temporary[PSMTP_LOCAL_PATH];
+    const char *leaf=strrchr(source->path,'/');
+    int dir=-1,fd=-1,original=-1,created=0,rc=MTP_FILESYSTEM;
+    static unsigned serial;
+    if(source->folder || source->wrapped || !leaf || !ops_write_area(source->path,1))return MTP_UNSUPPORTED;
+    size_t parent=(size_t)(leaf-source->path);
+    memcpy(folder,source->path,parent);folder[parent]=0;++leaf;
+    dir=psmtp_op_writable_directory(&source->location,folder);
+    if(dir<0)goto done;
+    if(psmtp_native_status(dir,&parent_stat))goto done;
+    do {
+        int n=snprintf(temporary,sizeof(temporary),"%s/.psmtp-text-%u.tmp",folder,++serial);
+        if(n<0 || (size_t)n>=sizeof(temporary)){rc=MTP_LIMIT;goto done;}
+        fd=ops_open(source->location.root,temporary,O_WRONLY|O_CREAT|O_EXCL);
+    } while(fd<0 && errno==EEXIST && serial<UINT32_MAX);
+    if(fd<0)goto done;
+    created=1;
+    for(size_t at=0;at<length;){
+        ssize_t n=write(fd,data+at,length-at);
+        if(n<0 && errno==EINTR)continue;
+        if(n<=0)goto done;
+        at+=(size_t)n;
+    }
+    if(fchmod(fd,source->native.st_mode&0777) || fsync(fd))goto done;
+    rc=psmtp_op_open_read(source,&original);
+    if(rc)goto done;
+    rc=ops_native_check(source->location.root,folder,&parent_stat,0);
+    if(rc)goto done;
+    if(rename(temporary,source->path)){rc=MTP_FILESYSTEM;goto done;}
+    created=0;
+    if(!psmtp_native_status(fd,&updated))source->native=updated;
+    rc=fsync(dir)?MTP_FILESYSTEM:0;
+done:
+    if(original>=0)close(original);
+    if(fd>=0)close(fd);
+    if(created && !ops_native_check(source->location.root,folder,&parent_stat,0))unlink(temporary);
+    if(dir>=0)close(dir);
+    return rc;
+}
+#endif
 static int ops_cancel(mtp_copy_progress progress,void *user,int phase,uint64_t done,uint64_t total) {return progress && progress(user,(enum mtp_copy_phase)phase,done,total)?MTP_CANCELLED:0;}
 static int ops_add_native(psmtp_op_plan *p,const char *path,const char *name,size_t parent,size_t depth,mtp_copy_progress progress,void *user) {
     size_t at=p->count;psmtp_op_node *e;int fd,rc;DIR *dir;struct dirent *child;
@@ -138,6 +208,9 @@ static int ops_phone_check(mtp_client *client,const psmtp_op_node *e,int full) {
     if(!rc && !ops_info_same(&e->phone.info,&info,full)) rc=MTP_VERIFY;
     if(!rc && full && !e->folder && e->phone.size_property) {rc=mtp_get_object_size(client,e->phone.handle,&bytes);if(!rc && bytes!=e->phone.size) rc=MTP_VERIFY;}
     return rc;
+}
+int psmtp_op_verify_phone_node(mtp_client *client,const psmtp_op_node *node) {
+    return ops_phone_check(client,node,1);
 }
 int psmtp_op_rename(const psmtp_op_ref *source,mtp_client *client,const char *name,char result[256],FILE *log) {
     int rc=0;result[0]=0;if(!psmtp_name_valid(name))return MTP_STATE;
@@ -183,10 +256,11 @@ int psmtp_op_rename(const psmtp_op_ref *source,mtp_client *client,const char *na
 }
 typedef struct {mtp_copy_progress progress;void *user;} ops_scan_context;
 static int ops_scan_phone(void *context,size_t files,size_t folders) {ops_scan_context *scan=context;return ops_cancel(scan->progress,scan->user,PSMTP_OP_SCAN,files+folders,0)!=0;}
-int psmtp_op_plan_build(psmtp_op_plan *p,const psmtp_op_ref *source,mtp_client *client,mtp_copy_progress progress,void *user,FILE *log) {
+static int ops_plan_build(psmtp_op_plan *p,const psmtp_op_ref *source,mtp_client *client,mtp_copy_progress progress,void *user,FILE *log,int deleting) {
     int rc;size_t i;ops_scan_context scan={progress,user};memset(p,0,sizeof(*p));p->source=*source;p->log=log;
     if(source->location.kind!=PSMTP_LOCATION_PHONE) {
-        rc=ops_native_check(source->location.root,source->path,&source->native,!source->folder);
+        int stable=!source->folder && (!deleting || !ops_app_log(source->path));
+        rc=ops_native_check(source->location.root,source->path,&source->native,stable);
         if(!rc) rc=ops_add_native(p,source->path,source->name,SIZE_MAX,0,progress,user);
     } else {
         mtp_device_info *device=malloc(sizeof(*device));mtp_copy_plan *plan=NULL;
@@ -215,6 +289,12 @@ int psmtp_op_plan_build(psmtp_op_plan *p,const psmtp_op_ref *source,mtp_client *
         }
     }
     return rc?ops_error(p,"preflight",rc):0;
+}
+int psmtp_op_plan_build(psmtp_op_plan *p,const psmtp_op_ref *source,mtp_client *client,mtp_copy_progress progress,void *user,FILE *log) {
+    return ops_plan_build(p,source,client,progress,user,log,0);
+}
+int psmtp_op_plan_delete(psmtp_op_plan *p,const psmtp_op_ref *source,mtp_client *client,mtp_copy_progress progress,void *user,FILE *log) {
+    return ops_plan_build(p,source,client,progress,user,log,1);
 }
 int psmtp_op_target(psmtp_op_plan *p,const psmtp_location *location,const char *path) {
     size_t i;int fd,rc;if(!p->count || location->kind==PSMTP_LOCATION_PHONE || !ops_write_area(path,0)) return MTP_UNSUPPORTED;
@@ -268,7 +348,6 @@ static int ops_pause_validate(void *user){ops_file *f=user;uint64_t ignored;int 
     if(!rc && f->plan->source.location.kind!=PSMTP_LOCATION_PHONE)rc=ops_native_check(f->plan->source.location.root,f->node->path,&f->node->native,1);
     return rc?MTP_DISCONNECTED:0;
 }
-static int ops_file_rewind(void *user) {return lseek(((ops_file *)user)->fd,0,SEEK_SET)==0?0:MTP_FILESYSTEM;}
 static int ops_file_read(void *user,uint8_t *data,size_t n,size_t *actual) {ops_file *f=user;ssize_t k;do {k=read(f->fd,data,n);} while(k<0 && errno==EINTR);*actual=k<0?0:(size_t)k;return k<0?MTP_FILESYSTEM:0;}
 static int ops_file_reopen_read(void *user) {
     ops_file *f=user;int fd=f->fd,rc;psmtp_native_stat st;
@@ -564,11 +643,13 @@ int psmtp_op_delete(psmtp_op_plan *p,mtp_client *client,int verified_move,mtp_co
     size_t i;int phone=p->source.location.kind==PSMTP_LOCATION_PHONE,rc=0;
     if(!p->count || p->count>MTP_PLAN_ITEMS)return MTP_STATE;
     if(phone && (!client || !p->delete_supported)) return MTP_UNSUPPORTED;
-    if(!phone && !ops_write_area(p->source.path,1)) return MTP_UNSUPPORTED;
+    if(!phone && !ops_delete_allowed(p->source.path,p->source.folder,verified_move)) return MTP_UNSUPPORTED;
     /* Validate the entire snapshot before deleting the first entry. */
     for(i=0;i<p->count;++i) {
         psmtp_op_node *e=&p->nodes[i];
-        rc=phone?ops_phone_check(client,e,1):ops_native_check(p->source.location.root,e->path,&e->native,!e->folder);if(rc) return ops_error(p,"delete-precheck",rc);
+        /* Open log streams can keep appending between the snapshot and unlink. */
+        int stable=!e->folder && (verified_move || !ops_app_log(e->path));
+        rc=phone?ops_phone_check(client,e,1):ops_native_check(p->source.location.root,e->path,&e->native,stable);if(rc) return ops_error(p,"delete-precheck",rc);
         if(phone && e->phone.info.protection) return MTP_UNSUPPORTED;
         if(verified_move) {
             if(!e->verified) return MTP_VERIFY;
@@ -578,7 +659,8 @@ int psmtp_op_delete(psmtp_op_plan *p,mtp_client *client,int verified_move,mtp_co
     for(i=p->count;i>0;--i) {
         psmtp_op_node *e=&p->nodes[i-1];const char *stage=e->folder?"delete-folder-identity":"delete-file-identity";
         rc=ops_cancel(progress,user,PSMTP_OP_DELETE,p->removed,p->count);if(rc) break;
-        rc=phone?ops_phone_check(client,e,!e->folder):ops_native_check(p->source.location.root,e->path,&e->native,!e->folder);if(rc){ops_failure(p,stage,rc);break;}
+        int stable=!e->folder && (verified_move || !ops_app_log(e->path));
+        rc=phone?ops_phone_check(client,e,!e->folder):ops_native_check(p->source.location.root,e->path,&e->native,stable);if(rc){ops_failure(p,stage,rc);break;}
         if(verified_move && !e->folder){rc=p->destination_location.kind==PSMTP_LOCATION_PHONE?ops_phone_destination(p,e,client):ops_native_check(p->destination_location.root,e->target,&e->destination,1);if(rc)break;}
         if(verified_move && e->folder) {rc=p->destination_location.kind==PSMTP_LOCATION_PHONE?ops_phone_destination(p,e,client):ops_native_check(p->destination_location.root,e->target,&e->destination,0);if(rc) break;}
         if(phone) {
@@ -586,7 +668,7 @@ int psmtp_op_delete(psmtp_op_plan *p,mtp_client *client,int verified_move,mtp_co
             rc=mtp_delete_object(client,e->phone.handle);if(rc) {p->uncertain_delete=client->poisoned;break;}e->removed=1;++p->removed;
             {mtp_object_info info;int missing=mtp_get_object_info(client,e->phone.handle,&info);if(missing!=MTP_RESPONSE || client->response!=0x2009) {rc=missing?missing:MTP_VERIFY;p->uncertain_delete=client->poisoned;break;}}
         } else {
-            if(!ops_write_area(e->path,1)) {rc=MTP_UNSUPPORTED;break;}
+            if(!ops_delete_allowed(e->path,e->folder,verified_move)) {rc=MTP_UNSUPPORTED;break;}
             if(e->folder) {stage="delete-folder-empty";rc=ops_empty_native(e->path);
                 if(!rc){stage="delete-folder-rmdir";rc=rmdir(e->path)?MTP_FILESYSTEM:0;}}
             else {stage="delete-file-unlink";rc=unlink(e->path)?MTP_FILESYSTEM:0;}
@@ -626,13 +708,15 @@ int psmtp_op_execute(psmtp_op_plan *p,mtp_client *client,int move,mtp_copy_progr
     }
     for(i=0;i<p->count;++i) if(!p->nodes[i].folder) {
         psmtp_op_node *e=&p->nodes[i];mtp_copy_result result;
+        int from_phone=p->source.location.kind==PSMTP_LOCATION_PHONE;
+        int full_verify=from_phone && psmtp_pkg_name(e->name);
         f.node=e;f.fd=f.destination_dir=f.parent_dir=-1;f.owned=f.published=0;
-        sink.user=&f;sink.begin=ops_file_begin;sink.space=ops_file_space;sink.write=ops_file_write;sink.sync=ops_file_sync;sink.rewind=ops_file_rewind;sink.read=ops_file_read;sink.publish=ops_file_publish;sink.dispose=ops_file_dispose;sink.prepare=NULL;
+        sink.user=&f;sink.begin=ops_file_begin;sink.space=ops_file_space;sink.write=ops_file_write;sink.sync=ops_file_sync;sink.rewind=ops_file_reopen_read;sink.read=ops_file_read;sink.publish=ops_file_publish;sink.dispose=ops_file_dispose;sink.prepare=NULL;
         sink.reopen_read=ops_file_reopen_read;sink.size=ops_file_size;sink.read_at=ops_file_read_at;sink.verify_workspace=&workspace;
-        rc=p->source.location.kind==PSMTP_LOCATION_PHONE?mtp_copy_run_streamed(client,&e->phone,&sink,progress,user,&result,p->log,1,PSMTP_DOWNLOAD_READER):ops_local_file(p,e,&sink,progress,user,&result);
+        rc=from_phone?mtp_copy_run_streamed(client,&e->phone,&sink,progress,user,&result,p->log,full_verify?MTP_COPY_VERIFY_CRC64:MTP_COPY_VERIFY_SPARSE,PSMTP_DOWNLOAD_READER):ops_local_file(p,e,&sink,progress,user,&result);
         if(result.published) {++p->copied;e->created=1;}
         if(rc || !result.published) {if(!rc) rc=MTP_VERIFY;goto done;}e->verified=1;memcpy(e->digest,result.digest,32);
-        if(p->log) {size_t k;fprintf(p->log,"stage=operation-file-verified item=%zu bytes=%" PRIu64 " sha256=",i,e->phone.size);for(k=0;k<32;++k) fprintf(p->log,"%02x",e->digest[k]);fputs(" verification=sparse-head-body-tail-size\n",p->log);}
+        if(p->log) {size_t k;fprintf(p->log,"stage=operation-file-verified item=%zu bytes=%" PRIu64 " sha256=",i,e->phone.size);for(k=0;k<32;++k) fprintf(p->log,"%02x",e->digest[k]);fprintf(p->log," verification=%s\n",full_verify?"full-crc64-reread":"sparse-head-body-tail-size");}
     }
     for(i=p->count;i>0;--i) if(p->nodes[i-1].folder) {
         psmtp_op_node *e=&p->nodes[i-1];

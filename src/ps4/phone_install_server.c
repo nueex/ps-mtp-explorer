@@ -12,6 +12,7 @@
 #include <orbis/Sysmodule.h>
 #include "monotonic.h"
 #include "lifecycle.h"
+#include "lan_server.h"
 #endif
 #include "native_sync.h"
 #define PHONE_CLIENTS 4u
@@ -19,6 +20,12 @@
 #define PHONE_MAX_CHUNK MTP_PARTIAL_BUFFER_BYTES
 #define PHONE_QUEUE_MAX 4u
 #define PHONE_SOCKET_WAIT_MS 5000u
+#define PHONE_PACKAGE_SEND_WAIT_MS 60000u
+#define PHONE_NET_ERRNO_BASE UINT32_C(0x80410100)
+enum {
+    PHONE_NET_EINTR=4, PHONE_NET_EPIPE=32, PHONE_NET_EAGAIN=35, PHONE_NET_ENOBUFS=55,
+    PHONE_NET_ECONNABORTED=53, PHONE_NET_ECONNRESET=54, PHONE_NET_ENOTCONN=57
+};
 #define PHONE_TRACE_QUEUE 16u
 #define PHONE_TRACE_LIMIT 64u
 /* libSceNet socket options: integer nonblocking mode, no timeval ABI guesses.
@@ -34,15 +41,17 @@ typedef struct {
     int32_t (*connect)(int32_t,const OrbisNetSockaddr *,OrbisNetSocklen_t);
     int32_t (*option)(int32_t,int32_t,int32_t,const void *,OrbisNetSocklen_t);
     int32_t (*recv)(int32_t,void *,size_t,int),(*send)(int32_t,const void *,size_t,int);
+    int *(*errno_loc)(void);
 } phone_net;
 typedef struct {
     struct psmtp_phone_server *server;OrbisPthread thread;unsigned index;
     int started,done,joined,fd,active,fetching,finished,blocked;
     unsigned head,tail,high_water;uint64_t offset,remaining;
+    int wire_error;
     size_t lengths[PHONE_QUEUE_MAX];uint8_t *buffers;
     char header[PSMTP_HTTP_HEADER_LIMIT+1];
 } phone_slot;
-typedef struct {unsigned serial,worker;int phase,status,rc,head,health;uint64_t offset,length;char line[192];} phone_trace;
+typedef struct {unsigned serial,worker;int phase,status,rc,head,health,wire_error;uint64_t offset,length;char line[192];} phone_trace;
 struct psmtp_phone_server {
     phone_net net;psmtp_phone_source source;phone_slot slots[PHONE_CLIENTS];psmtp_sync io,state;
     int listener,probe,pool,module_loaded,net_owned,stop,hard_cancel,error,hooks,close_failed;unsigned requests,epoch;
@@ -65,7 +74,7 @@ unsigned psmtp_phone_server_requests(psmtp_phone_server *s){return s?__atomic_lo
 static void trace_request(phone_slot *slot,const psmtp_http_request *r,int phase,int rc){psmtp_phone_server *s=slot->server;phone_trace *t;size_t i;
     if(psmtp_sync_lock(&s->state))return;
     if(s->trace_serial>=PHONE_TRACE_LIMIT || s->trace_count==PHONE_TRACE_QUEUE){++s->trace_dropped;psmtp_sync_unlock(&s->state);return;}
-    t=&s->traces[(s->trace_head+s->trace_count++)%PHONE_TRACE_QUEUE];memset(t,0,sizeof(*t));t->serial=++s->trace_serial;t->worker=slot->index;t->phase=phase;t->rc=rc;
+    t=&s->traces[(s->trace_head+s->trace_count++)%PHONE_TRACE_QUEUE];memset(t,0,sizeof(*t));t->serial=++s->trace_serial;t->worker=slot->index;t->phase=phase;t->rc=rc;t->wire_error=slot->wire_error;
     if(r){t->status=r->status;t->head=r->head;t->health=r->health;t->offset=r->offset;t->length=r->length;}
     for(i=0;i<sizeof(t->line)-1 && slot->header[i] && slot->header[i]!='\r' && slot->header[i]!='\n';++i){unsigned char c=(unsigned char)slot->header[i];t->line[i]=(c>=32 && c<127 && c!='"')?(char)c:'?';}
     psmtp_sync_unlock(&s->state);
@@ -73,7 +82,7 @@ static void trace_request(phone_slot *slot,const psmtp_http_request *r,int phase
 void psmtp_phone_server_log(psmtp_phone_server *s,FILE *log){unsigned i;if(!s || !log || !s->state.ready)return;
     for(i=0;i<PHONE_TRACE_QUEUE;++i){phone_trace t;if(psmtp_sync_lock(&s->state))return;if(!s->trace_count){psmtp_sync_unlock(&s->state);break;}
         t=s->traces[s->trace_head];s->trace_head=(s->trace_head+1)%PHONE_TRACE_QUEUE;--s->trace_count;psmtp_sync_unlock(&s->state);
-        fprintf(log,"stage=phone-http request=%u worker=%u phase=%d status=%d app-status=%d head=%d health=%d offset=%" PRIu64 " bytes=%" PRIu64 " line=\"%s\"\n",t.serial,t.worker,t.phase,t.status,t.rc,t.head,t.health,t.offset,t.length,t.line);
+        fprintf(log,"stage=phone-http request=%u worker=%u phase=%d status=%d app-status=%d head=%d health=%d offset=%" PRIu64 " bytes=%" PRIu64 " net-errno=%d line=\"%s\"\n",t.serial,t.worker,t.phase,t.status,t.rc,t.head,t.health,t.offset,t.length,t.wire_error,t.line);
     }
 }
 static int phone_control(psmtp_phone_server *s,int *pause,unsigned *epoch){int rc;*pause=0;*epoch=0;
@@ -85,15 +94,41 @@ static int phone_control(psmtp_phone_server *s,int *pause,unsigned *epoch){int r
 static int phone_checkpoint(void *user){psmtp_phone_server *s=user;int pause,rc;unsigned epoch;uint64_t start=0;
     for(;;){rc=phone_control(s,&pause,&epoch);if(rc)return rc;if(!pause)break;if(!start)start=phone_now();(void)sceKernelUsleep(10000);}
     if(start){uint64_t now=phone_now();if(now>=start)s->pause_total+=now-start;}
-    if(epoch!=s->epoch){mtp_client *c=s->source.client;rc=c->resume_check?c->resume_check(c->io.user):MTP_UNSUPPORTED;if(rc)return rc;s->epoch=epoch;}
+    if(epoch!=s->epoch){mtp_client *c=s->source.client;if(c){rc=c->resume_check?c->resume_check(c->io.user):MTP_UNSUPPORTED;if(rc)return rc;}s->epoch=epoch;}
     return 0;
 }
 static uint64_t phone_paused(void *user){return ((psmtp_phone_server *)user)->pause_total;}
 static int wire_stopped(psmtp_phone_server *s){int pause;unsigned epoch;return __atomic_load_n(&s->stop,__ATOMIC_ACQUIRE) || psmtp_phone_server_error(s) || phone_control(s,&pause,&epoch)!=0;}
-static int wire_send(psmtp_phone_server *s,int fd,const void *data,size_t length){const uint8_t *bytes=data;size_t at=0;uint64_t last=phone_now();
-    while(at<length){int32_t n;if(wire_stopped(s))return MTP_CANCELLED;n=s->net.send(fd,bytes+at,length-at,0x20000);
-        if(n>0){if((size_t)n>length-at)return MTP_PROTOCOL;at+=(size_t)n;last=phone_now();}
-        else {if(n==0 || phone_now()-last>=PHONE_SOCKET_WAIT_MS)return MTP_IO;(void)sceKernelUsleep(1000);}}
+static int net_error(const phone_net *net,int32_t result){
+    uint32_t code=(uint32_t)result;
+    if((code & UINT32_C(0xffffff00))==PHONE_NET_ERRNO_BASE)return (int)(code & 0xff);
+    if(result < -1 && result >= -255)return -result;
+    if(result==-1 && net->errno_loc){
+        const int *error=net->errno_loc();
+        if(error)return *error;
+    }
+    return 0;
+}
+static int wire_send(psmtp_phone_server *s,int fd,const void *data,size_t length,int package,int *wire_error){const uint8_t *bytes=data;size_t at=0;uint64_t last=phone_now();
+    while(at<length){
+        int32_t n;int pause;unsigned epoch;
+        if(__atomic_load_n(&s->stop,__ATOMIC_ACQUIRE) || psmtp_phone_server_error(s) || phone_control(s,&pause,&epoch))return MTP_CANCELLED;
+        if(package && pause){last=phone_now();(void)sceKernelUsleep(10000);continue;}
+        n=s->net.send(fd,bytes+at,length-at,0x20000);
+        if(n>0){if((size_t)n>length-at)return MTP_PROTOCOL;at+=(size_t)n;last=phone_now();continue;}
+        if(package){
+            int error=net_error(&s->net,n);
+            if(wire_error)*wire_error=error;
+            /* BGFT can drop a probe or re-request a range on a fresh socket. */
+            if(!n || error==PHONE_NET_EPIPE || error==PHONE_NET_ECONNABORTED ||
+               error==PHONE_NET_ECONNRESET || error==PHONE_NET_ENOTCONN)return MTP_DISCONNECTED;
+            /* A BGFT socket belongs to one request. Close a failed request
+             * so BGFT can retry it without invalidating the staged source. */
+            if(error!=PHONE_NET_EAGAIN && error!=PHONE_NET_EINTR && error!=PHONE_NET_ENOBUFS)return MTP_DISCONNECTED;
+            if(phone_now()-last>=PHONE_PACKAGE_SEND_WAIT_MS)return MTP_DISCONNECTED;
+        }else if(!n || phone_now()-last>=PHONE_SOCKET_WAIT_MS)return MTP_IO;
+        (void)sceKernelUsleep(1000);
+    }
     return 0;
 }
 static int wire_header(psmtp_phone_server *s,int fd,char *bytes,size_t cap,size_t *length){uint64_t start=phone_now();size_t n=0;
@@ -123,10 +158,13 @@ static void buffer_free(void *p){
 static void *phone_reader(void *user){psmtp_phone_server *s=user;
     while(!wire_stopped(s)){phone_slot *slot=NULL;unsigned i,index=0;size_t length=0;uint64_t offset=0,before,started,finished;int rc;
         if(psmtp_sync_lock(&s->state)){phone_error(s,MTP_IO);break;}
+        uint64_t available=s->source.available?s->source.available(s->source.user):s->source.size;
         for(i=0;i<PHONE_CLIENTS;++i){unsigned n=(s->reader_cursor+i)%PHONE_CLIENTS;phone_slot *candidate=&s->slots[n];
-            if(candidate->active && !candidate->fetching && candidate->remaining && candidate->head-candidate->tail<s->queue_slots){slot=candidate;s->reader_cursor=(n+1)%PHONE_CLIENTS;break;}}
+            if(candidate->active && !candidate->fetching && candidate->remaining && candidate->offset<available && candidate->head-candidate->tail<s->queue_slots){slot=candidate;s->reader_cursor=(n+1)%PHONE_CLIENTS;break;}}
         if(!slot){rc=psmtp_sync_wait(&s->state,50000);psmtp_sync_unlock(&s->state);if(rc){phone_error(s,MTP_IO);break;}continue;}
-        slot->fetching=1;index=slot->head%s->queue_slots;offset=slot->offset;length=(size_t)(slot->remaining>s->chunk_bytes?s->chunk_bytes:slot->remaining);psmtp_sync_unlock(&s->state);
+        slot->fetching=1;index=slot->head%s->queue_slots;offset=slot->offset;length=(size_t)(slot->remaining>s->chunk_bytes?s->chunk_bytes:slot->remaining);
+        if(available-offset<length)length=(size_t)(available-offset);
+        psmtp_sync_unlock(&s->state);
         before=phone_now();rc=psmtp_sync_lock(&s->io);started=phone_now();if(started>=before)__atomic_fetch_add(&s->io_wait_ms,started-before,__ATOMIC_RELAXED);
         if(!rc){rc=phone_checkpoint(s);if(!rc && !__atomic_load_n(&s->stop,__ATOMIC_ACQUIRE))rc=s->source.read(s->source.user,offset,slot->buffers+(size_t)index*s->chunk_bytes,length);else if(!rc)rc=MTP_CANCELLED;psmtp_sync_unlock(&s->io);}else rc=MTP_IO;
         finished=phone_now();__atomic_fetch_add(&s->read_calls,1,__ATOMIC_RELAXED);if(finished>=started)__atomic_fetch_add(&s->read_ms,finished-started,__ATOMIC_RELAXED);if(!rc)__atomic_fetch_add(&s->read_bytes,(uint64_t)length,__ATOMIC_RELAXED);
@@ -142,7 +180,7 @@ static int queued_body(phone_slot *slot,const psmtp_http_request *request){psmtp
         if(psmtp_sync_lock(&s->state)){rc=MTP_IO;break;}
         if(slot->head==slot->tail){if(slot->finished){psmtp_sync_unlock(&s->state);break;}rc=psmtp_sync_wait(&s->state,50000);psmtp_sync_unlock(&s->state);if(rc){rc=MTP_IO;break;}continue;}
         index=slot->tail%s->queue_slots;length=slot->lengths[index];psmtp_sync_unlock(&s->state);
-        before=phone_now();rc=wire_send(s,slot->fd,slot->buffers+(size_t)index*s->chunk_bytes,length);after=phone_now();if(after>=before)__atomic_fetch_add(&s->send_ms,after-before,__ATOMIC_RELAXED);if(rc)break;
+        before=phone_now();rc=wire_send(s,slot->fd,slot->buffers+(size_t)index*s->chunk_bytes,length,1,&slot->wire_error);after=phone_now();if(after>=before)__atomic_fetch_add(&s->send_ms,after-before,__ATOMIC_RELAXED);if(rc)break;
         __atomic_fetch_add(&s->sent_bytes,(uint64_t)length,__ATOMIC_RELAXED);
         if(psmtp_sync_lock(&s->state)){rc=MTP_IO;break;}++slot->tail;psmtp_sync_signal_locked(&s->state);psmtp_sync_unlock(&s->state);
     }
@@ -157,21 +195,24 @@ static int queued_body(phone_slot *slot,const psmtp_http_request *request){psmtp
 static void slot_close(phone_slot *slot){psmtp_phone_server *s=slot->server;if(psmtp_sync_lock(&s->state)){phone_error(s,MTP_IO);return;}
     if(slot->fd>=0){int fd=slot->fd;slot->fd=-1;if(s->net.close(fd))__atomic_store_n(&s->close_failed,1,__ATOMIC_RELEASE);}psmtp_sync_unlock(&s->state);
 }
-static void serve(phone_slot *slot){psmtp_phone_server *s=slot->server;psmtp_http_request request;size_t header_size=0;int rc,n;char reply[512];
-    slot->header[0]=0;
+static void serve(phone_slot *slot){psmtp_phone_server *s=slot->server;psmtp_http_request request;size_t header_size=0;int rc,n,package;char reply[512];
+    slot->header[0]=0;slot->wire_error=0;
     rc=wire_header(s,slot->fd,slot->header,sizeof(slot->header),&header_size);
-    if(rc){trace_request(slot,NULL,1,rc);if(rc==MTP_LIMIT){memset(&request,0,sizeof(request));request.status=431;n=psmtp_http_response(reply,sizeof(reply),&request);if(n>0)(void)wire_send(s,slot->fd,reply,(size_t)n);}return;}
+    if(rc){trace_request(slot,NULL,1,rc);if(rc==MTP_LIMIT){memset(&request,0,sizeof(request));request.status=431;n=psmtp_http_response(reply,sizeof(reply),&request);if(n>0)(void)wire_send(s,slot->fd,reply,(size_t)n,0,NULL);}return;}
     (void)psmtp_http_parse(slot->header,header_size,s->path,s->source.size,&request);
     trace_request(slot,&request,0,0);
-    if((request.status==200 || request.status==206) && !request.health){
+    package=(request.status==200 || request.status==206) && !request.health;
+    if(package){
         if(psmtp_sync_lock(&s->io)){phone_error(s,MTP_IO);return;}
         rc=phone_checkpoint(s);if(!rc && s->source.validate)rc=s->source.validate(s->source.user);
         psmtp_sync_unlock(&s->io);if(rc){phone_error(s,rc);return;}
         __atomic_fetch_add(&s->requests,1,__ATOMIC_RELAXED);
     }
-    n=psmtp_http_response(reply,sizeof(reply),&request);rc=n<0?MTP_LIMIT:wire_send(s,slot->fd,reply,(size_t)n);if(rc){trace_request(slot,&request,2,rc);return;}
-    if(request.head || request.health || (request.status!=200 && request.status!=206))return;
-    rc=queued_body(slot,&request);if(rc){trace_request(slot,&request,3,rc);return;}
+    n=psmtp_http_response(reply,sizeof(reply),&request);rc=n<0?MTP_LIMIT:wire_send(s,slot->fd,reply,(size_t)n,package,&slot->wire_error);
+    if(rc){if(package && rc!=MTP_DISCONNECTED && rc!=MTP_CANCELLED)phone_error(s,rc);trace_request(slot,&request,2,rc);return;}
+    if(request.head || !package)return;
+    rc=queued_body(slot,&request);
+    if(rc){if(rc!=MTP_DISCONNECTED && rc!=MTP_CANCELLED)phone_error(s,rc);trace_request(slot,&request,3,rc);return;}
     if(psmtp_sync_lock(&s->io)){phone_error(s,MTP_IO);return;}
     rc=s->source.validate?s->source.validate(s->source.user):0;psmtp_sync_unlock(&s->io);if(rc)phone_error(s,rc);
 }
@@ -203,6 +244,7 @@ static int net_load(psmtp_phone_server *s){
     NET(socket,sceNetSocket);NET(close,sceNetSocketClose);NET(abort,sceNetSocketAbort);NET(bind,sceNetBind);NET(listen,sceNetListen);
     NET(accept,sceNetAccept);NET(name,sceNetGetsockname);NET(connect,sceNetConnect);NET(option,sceNetSetsockopt);NET(recv,sceNetRecv);NET(send,sceNetSend);
 #undef NET
+    (void)net_symbol(module,"sceNetErrnoLoc",&s->net.errno_loc,sizeof(s->net.errno_loc));
     return 0;
 #endif
 }
@@ -211,7 +253,7 @@ static int health(psmtp_phone_server *s,const uint8_t addr[16]){char request[256
     if(psmtp_sync_lock(&s->state)){s->net.close(fd);return MTP_IO;}s->probe=fd;psmtp_sync_unlock(&s->state);
     rc=nonblock(s,fd);if(!rc){(void)s->net.connect(fd,(const OrbisNetSockaddr *)addr,16);
         n=snprintf(request,sizeof(request),"HEAD %s/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",s->path);
-        rc=n<0 || (size_t)n>=sizeof(request)?MTP_LIMIT:wire_send(s,fd,request,(size_t)n);if(!rc)rc=wire_header(s,fd,reply,sizeof(reply),&length);
+        rc=n<0 || (size_t)n>=sizeof(request)?MTP_LIMIT:wire_send(s,fd,request,(size_t)n,0,NULL);if(!rc)rc=wire_header(s,fd,reply,sizeof(reply),&length);
         if(!rc && (length<12 || memcmp(reply,"HTTP/1.1 200",12) || !strstr(reply,"\r\nX-PSMTP-Bridge: ready\r\n")))rc=MTP_PROTOCOL;}
     if(psmtp_sync_lock(&s->state))return MTP_IO;s->probe=-1;if(s->net.close(fd)){__atomic_store_n(&s->close_failed,1,__ATOMIC_RELEASE);rc=MTP_IO;}psmtp_sync_unlock(&s->state);return rc;
 }
@@ -245,7 +287,14 @@ int psmtp_phone_server_close(psmtp_phone_server **owner,int hard,FILE *log){psmt
     for(i=0;i<PHONE_CLIENTS;++i)if(s->slots[i].fd>=0){rc=s->net.close(s->slots[i].fd);s->slots[i].fd=-1;if(rc){__atomic_store_n(&s->close_failed,1,__ATOMIC_RELEASE);return MTP_IO;}}
     if(s->hooks){mtp_client *c=s->source.client;c->control_user=s->old_control;c->io_checkpoint=s->old_checkpoint;c->paused_ms=s->old_paused;c->background_io=s->old_quiet;s->hooks=0;}
     if(s->listener>=0){rc=s->net.close(s->listener);s->listener=-1;if(rc){__atomic_store_n(&s->close_failed,1,__ATOMIC_RELEASE);return MTP_IO;}}
-    if(s->pool>=0){s->net.pool_destroy(s->pool);s->pool=-1;}if(s->net_owned){s->net.term();s->net_owned=0;}
+    if(s->pool>=0){s->net.pool_destroy(s->pool);s->pool=-1;}if(s->net_owned){
+#ifdef PSMTP_TEST_PHONE_SERVER
+        s->net.term();
+#else
+        psmtp_lan_net_release(s->net.term);
+#endif
+        s->net_owned=0;
+    }
     if(s->module_loaded){
 #ifdef PSMTP_TEST_PHONE_SERVER
         rc=phone_test_module_unload();
@@ -261,7 +310,8 @@ int psmtp_phone_server_close(psmtp_phone_server **owner,int hard,FILE *log){psmt
     for(i=0;i<PHONE_CLIENTS;++i)buffer_free(s->slots[i].buffers);psmtp_sync_destroy(&s->state);psmtp_sync_destroy(&s->io);free(s);*owner=NULL;return 0;
 }
 int psmtp_phone_server_open(psmtp_phone_server **out,const psmtp_phone_source *source,char *url,size_t cap,FILE *log){static unsigned sequence;psmtp_phone_server *s;uint8_t addr[16];OrbisNetSocklen_t size=16;unsigned i,port;int rc,pause;const char *stage="allocate";
-    if(!out || *out || !source || !source->client || !source->read || !source->control || (source->chunk_bytes && source->chunk_bytes!=PHONE_CHUNK && source->chunk_bytes!=MTP_PARTIAL_BASE_BYTES && source->chunk_bytes!=PHONE_MAX_CHUNK) || source->client->control_user || source->client->io_checkpoint || source->client->paused_ms || source->client->io_owner)return MTP_STATE;
+    if(!out || *out || !source || !source->read || !source->control || (source->chunk_bytes && source->chunk_bytes!=PHONE_CHUNK && source->chunk_bytes!=MTP_PARTIAL_BASE_BYTES && source->chunk_bytes!=PHONE_MAX_CHUNK))return MTP_STATE;
+    if(source->client && (source->client->control_user || source->client->io_checkpoint || source->client->paused_ms || source->client->io_owner))return MTP_STATE;
     if(!phone_now())return MTP_UNSUPPORTED;
     s=calloc(1,sizeof(*s));if(!s)return MTP_MEMORY;*out=s;s->source=*source;s->listener=s->probe=s->pool=-1;s->chunk_bytes=source->chunk_bytes?source->chunk_bytes:PHONE_CHUNK;
     for(i=0;i<PHONE_CLIENTS;++i){s->slots[i].server=s;s->slots[i].index=i;s->slots[i].fd=-1;}
@@ -271,15 +321,23 @@ int psmtp_phone_server_open(psmtp_phone_server **out,const psmtp_phone_source *s
     for(;;){int allocated=1;for(i=0;i<PHONE_CLIENTS;++i){s->slots[i].buffers=buffer_alloc(s->queue_slots*s->chunk_bytes);if(!s->slots[i].buffers){allocated=0;break;}}if(allocated)break;
         for(i=0;i<PHONE_CLIENTS;++i){buffer_free(s->slots[i].buffers);s->slots[i].buffers=NULL;}
         if(s->chunk_bytes==PHONE_CHUNK){rc=MTP_MEMORY;goto fail;}s->chunk_bytes=s->chunk_bytes==PHONE_MAX_CHUNK?MTP_PARTIAL_BASE_BYTES:PHONE_CHUNK;s->queue_slots=s->chunk_bytes==MTP_PARTIAL_BASE_BYTES?2:1;}
-    stage="network-api";rc=net_load(s);if(rc)goto fail;stage="network-init";if(s->net.init()){rc=MTP_IO;goto fail;}s->net_owned=1;
+    stage="network-api";rc=net_load(s);if(rc)goto fail;stage="network-init";
+#ifdef PSMTP_TEST_PHONE_SERVER
+    rc=s->net.init();
+#else
+    rc=psmtp_lan_net_acquire(s->net.init);
+#endif
+    if(rc){rc=MTP_IO;goto fail;}s->net_owned=1;
     stage="network-pool";s->pool=s->net.pool_create("psmtp-phone",1048576,0);if(s->pool<0){rc=MTP_MEMORY;goto fail;}
     stage="listener";s->listener=s->net.socket("psmtp-phone",2,1,0);if(s->listener<0){rc=MTP_IO;goto fail;}rc=nonblock(s,s->listener);if(rc)goto fail;
     stage="loopback-bind";address(addr,0);if(s->net.bind(s->listener,(const OrbisNetSockaddr *)addr,16) || s->net.listen(s->listener,8) || s->net.name(s->listener,(OrbisNetSockaddr *)addr,&size) || size!=16 || addr[1]!=2 || addr[4]!=127 || addr[5] || addr[6] || addr[7]!=1){rc=MTP_IO;goto fail;}
     port=(unsigned)addr[2]*256u+addr[3];if(!port){rc=MTP_IO;goto fail;}
     snprintf(s->path,sizeof(s->path),"/phone-%" PRIx64 "-%08x.pkg",phone_now(),__atomic_add_fetch(&sequence,1,__ATOMIC_RELAXED));
     rc=snprintf(url,cap,"http://127.0.0.1:%u%s",port,s->path);if(rc<0 || (size_t)rc>=cap){rc=MTP_LIMIT;goto fail;}
-    s->old_control=source->client->control_user;s->old_checkpoint=source->client->io_checkpoint;s->old_paused=source->client->paused_ms;s->old_quiet=source->client->background_io;
-    source->client->control_user=s;source->client->io_checkpoint=phone_checkpoint;source->client->paused_ms=phone_paused;source->client->background_io=1;s->hooks=1;
+    if(source->client){
+        s->old_control=source->client->control_user;s->old_checkpoint=source->client->io_checkpoint;s->old_paused=source->client->paused_ms;s->old_quiet=source->client->background_io;
+        source->client->control_user=s;source->client->io_checkpoint=phone_checkpoint;source->client->paused_ms=phone_paused;source->client->background_io=1;s->hooks=1;
+    }
     stage="mtp-reader";rc=scePthreadCreate(&s->reader,NULL,phone_reader,s,"psmtp-phone-read");if(rc){rc=MTP_IO;goto fail;}s->reader_started=1;
     stage="http-workers";for(i=0;i<PHONE_CLIENTS;++i){rc=scePthreadCreate(&s->slots[i].thread,NULL,phone_worker,&s->slots[i],"psmtp-phone");if(rc){rc=MTP_IO;goto fail;}s->slots[i].started=1;}
     stage="loopback-health";rc=health(s,addr);if(rc)goto fail;

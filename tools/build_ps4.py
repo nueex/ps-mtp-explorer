@@ -11,6 +11,7 @@
 No Sony SDK, kernel patch, device connection or deployment is performed.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -24,15 +25,22 @@ import sys
 from embed_font import embed
 from inspect_ps4 import converted_image, elf as inspect_elf, application_exit_imports
 from ps4_runtime import stage_runtime, runtime_inventory, PACKAGE_FILES
+from ps4_archives import build_archives
 from package_identity import validate_identity, validate_package_identity, validate_dialog_controls, COMMON_DIALOG_ATTRIBUTE
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ['src/ps4/update_client.c','src/ps4/system_dialog.c','src/update.c','src/http_range.c','src/install_error.c','src/shutdown.c','src/ps4/controller.c','src/ps4/ime.c','src/ps4/notify.c','src/ps4/preferences.c','src/ps4/download.c','src/ps4/work.c','src/sparse_verify.c','src/pkg.c','src/transfer_meter.c','src/ps4/phone_install_server.c','src/ps4/package_install.c','src/ps4/storage_space.c','src/keyboard.c','src/metadata.c','src/ps4/preview.c','src/name.c','src/device_sound.c','src/usb_label.c','src/ps4/device_audio.c','src/device_watch.c','src/locations.c','src/ui_format.c','src/copy_plan.c','src/ps4/ui_font.c','src/ps4/ui_draw.c','src/ps4/file_store.c','src/ps4/file_ops.c','src/copy.c', 'src/sha256.c', 'src/mtp.c', 'src/usb_select.c', 'src/navigator.c', 'src/browser.c', 'src/diagnostic.c',
-           'src/diag_log.c', 'src/usb_module.c', 'src/ps4/copy_file.c', 'src/ps4/usb_ps4.c', 'src/ps4/console_render.c', 'src/ps4/screen.c', 'src/ps4/exit.c', 'src/ps4/lifecycle.c', 'src/ps4/main.c','src/ps4/process_access.c','third_party/libjbc/jailbreak.c','third_party/libjbc/kernelrw.c']
+HTTPS_ROOTS = 'third_party/mozilla-ca/cacert.pem'
+HTTPS_ROOTS_SHA256 = '427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285'
+SOURCES = ['src/ps4/lan_server.c','src/ps4/lan_identity.c','src/ps4/update_client.c','src/ps4/system_dialog.c','src/update.c','src/http_range.c','src/install_error.c','src/shutdown.c','src/ps4/controller.c','src/ps4/ime.c','src/ps4/notify.c','src/ps4/preferences.c','src/ps4/download.c','src/ps4/work.c','src/sparse_verify.c','src/pkg.c','src/transfer_meter.c','src/ps4/phone_install_server.c','src/ps4/package_install.c','src/ps4/storage_space.c','src/keyboard.c','src/metadata.c','src/ps4/preview.c','src/name.c','src/device_sound.c','src/usb_label.c','src/ps4/device_audio.c','src/device_watch.c','src/locations.c','src/ui_format.c','src/copy_plan.c','src/ps4/ui_font.c','src/ps4/ui_draw.c','src/ps4/file_store.c','src/ps4/file_ops.c','src/copy.c', 'src/sha256.c', 'src/mtp.c', 'src/usb_select.c', 'src/navigator.c', 'src/browser.c', 'src/diagnostic.c',
+           'src/diag_log.c', 'src/usb_module.c', 'src/ps4/copy_file.c', 'src/ps4/usb_ps4.c', 'src/direct_download.c', 'src/ps4/usb_download.c', 'src/ps4/console_render.c', 'src/ps4/screen.c', 'src/ps4/exit.c', 'src/ps4/lifecycle.c', 'src/ps4/main.c','src/ps4/process_access.c','third_party/libjbc/jailbreak.c','third_party/libjbc/kernelrw.c']
 TITLE_ID = re.search(r'^#define PSMTP_TITLE_ID "([^"]+)"$',
                      (ROOT/'include/psmtp/version.h').read_text(),re.MULTILINE).group(1)
 CONTENT_ID = 'IV0000-'+TITLE_ID+'_00-NUEEXMTP00000000'
-RELEASE = '2.0.0'
+RELEASE = re.search(r'^#define PSMTP_VERSION "([^"]+)"$',
+                    (ROOT/'include/psmtp/version.h').read_text(), re.MULTILINE).group(1)
+SOURCES.append('src/lan_spake.c')
+SOURCES.append('src/ps4/mp4_aac.c')
+SOURCES.extend(['src/ps4/viewer.c','src/ps4/media_player.c','src/ps4/music_decoder.c','src/ps4/archive_job.c'])
 
 # These units contain HEN kernel callbacks/assembly that cannot use userland
 # stack guards. All standard application and image-decoder units stay protected.
@@ -46,10 +54,10 @@ def package_version():
     version = re.search(r'#define PSMTP_VERSION "([^"]+)"', header).group(1)
     if re.search(r'#define PSMTP_TITLE_ID "([^"]+)"', header).group(1) != TITLE_ID:
         raise ValueError('Installer self-replacement guard and packaged TITLE_ID must match')
-    match = re.fullmatch(r'(\d{1,2})\.(\d)\.(\d)', version)
+    match = re.fullmatch(r'(\d{1,2})\.(\d)(?:\.(\d))?', version)
     if version != RELEASE or not match:
-        raise ValueError('Release must match the displayed major.minor.patch version within PS4 numeric limits')
-    major, minor, patch = map(int, match.groups())
+        raise ValueError('Release must use major.minor or major.minor.patch within PS4 numeric limits')
+    major, minor, patch = (int(part or '0') for part in match.groups())
     native = f'{major:02d}.{minor}{patch}'
     declared = re.search(r'^#define PSMTP_PACKAGE_VERSION "([^"]+)"$', header, re.MULTILINE)
     if not declared or declared.group(1) != native:
@@ -59,6 +67,26 @@ def package_version():
 def sha(path):
     with Path(path).open('rb') as source:
         return hashlib.file_digest(source,'sha256').hexdigest()
+
+def embed_https_roots(output):
+    bundle = ROOT / HTTPS_ROOTS
+    if sha(bundle) != HTTPS_ROOTS_SHA256:
+        raise SystemExit('Mozilla HTTPS root bundle does not match its published checksum.')
+    text = bundle.read_text(encoding='utf-8')
+    certificates = re.findall(r'-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+-----END CERTIFICATE-----', text)
+    if len(certificates) != 118:
+        raise SystemExit('Unexpected Mozilla HTTPS root certificate count.')
+    lines = ['/* Generated from the Mozilla CA bundle. */', 'static SslPem https_roots[] = {']
+    for certificate in certificates:
+        pem_lines = [line + '\r\n' for line in certificate.splitlines()]
+        lines.append('    {')
+        lines.extend('        ' + json.dumps(line) for line in pem_lines)
+        lines.append(f'        , {sum(map(len, pem_lines))}u')
+        lines.append('    },')
+    lines.extend(['};', 'static SslPem *https_root_list[] = {'])
+    lines.extend(f'    &https_roots[{index}],' for index in range(len(certificates)))
+    lines.extend(['};', ''])
+    (output / 'psmtp_https_roots.inc').write_text('\n'.join(lines), encoding='ascii')
 
 def read_sfo(path):
     data=Path(path).read_bytes()
@@ -83,6 +111,7 @@ def main():
                         help='acknowledge the documented unverified USB ABI')
     parser.add_argument('--production', action='store_true', help='build without diagnostic logging or development metadata')
     parser.add_argument('--package', action='store_true', help='also build, extract and validate the PS4 PKG')
+    parser.add_argument('--firebase-database-url', help='Firebase Realtime Database base URL for release checks')
     parser.add_argument('--diagnostic-build', default='20261028-output-access-p1', help='local diagnostic journal build marker (experimental profile only)')
     parser.add_argument('--output', default=str(ROOT/'build-ps4'))
     args = parser.parse_args()
@@ -108,8 +137,18 @@ def main():
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     embed()
+    embed_https_roots(output)
     source_inputs=(SOURCES+['tools/build_ps4.py','tools/ps4_runtime.py','tools/package_identity.py','distribution/LICENSES.txt','src/ps4/link.x','src/ps4/font_data.inc','src/ps4/reference_assets.inc','assets/reference/icon0.png','assets/reference/provenance.json','assets/fonts/NotoSans-Light.ttf','assets/fonts/OFL.txt']+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'assets/icons').iterdir()) if p.is_file()]+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'include').rglob('*.h'))]+
-        [p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'src/ps4').glob('*.h'))]+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'third_party/libjbc').iterdir()) if p.is_file() and p.suffix!='.c']+['third_party/stb/stb_image.h','src/preview_decode_budget.h'])
+        [p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'src/ps4').glob('*.h'))]+[p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'third_party/libjbc').iterdir()) if p.is_file() and p.suffix!='.c']+['third_party/stb/stb_image.h','src/preview_decode_budget.h','src/image_scale.h'])
+    bearssl = ROOT/'third_party/bearssl'
+    qr_sources = ['src/lan_pair.c', 'third_party/qrcodegen/qrcodegen.c']
+    source_inputs += qr_sources + ['third_party/qrcodegen/qrcodegen.h', 'third_party/qrcodegen/LICENSE']
+    source_inputs += ['tools/ps4_archives.py']
+    source_inputs += [HTTPS_ROOTS, 'third_party/mozilla-ca/LICENSE.txt']
+    source_inputs += ['tools/embed_font.py','src/ps4/theme_font_data.inc','src/ps4/theme_colors.inc',
+                      'assets/fonts/Urbanist-Regular.ttf','assets/fonts/Urbanist-OFL.txt']
+    source_inputs += [p.relative_to(ROOT).as_posix() for p in sorted((ROOT/'third_party/dr_libs').iterdir()) if p.is_file()]
+    source_inputs += [path.relative_to(ROOT).as_posix() for path in sorted(bearssl.rglob('*')) if path.is_file()]
     report = {'release': RELEASE, 'app_version': app_version, 'production': args.production, 'diagnostic_logging': not args.production, 'diagnostic_build': None if args.production else args.diagnostic_build, 'user_output_file_mode': '0666', 'user_output_directory_mode': '0777', 'usb_mount_permissions_authoritative': True, 'android_mtp_descriptor_identification': True, 'experimental': not args.production, 'hardware_tested': False, 'usb_tests_enabled': True, 'shutdown_build': '20261028-lifecycle-1.02', 'shutdown_source_baseline': '20261027-startup-repair-r2', 'persistent_shutdown_journal': not args.production, 'native_orbis_signal_handlers': True, 'credential_snapshot_experiment': False, 'filesystem_access_profile': 'console-tested-libjbc-kernel-copy',
               'phone_upload': True, 'upload_max_file_bytes': (2**64-1)//8, 'large_phone_upload': True, 'large_upload_requires_partial64_and_size64': True, 'large_upload_sentinel_header': True, 'large_transfer_hardware_tested': False, 'pretransfer_space_check': True, 'verification_status_only': True, 'layered_system_chimes': True, 'diagnostic_render_reentry_guard': True, 'render_timing_committed_before_logging': True, 'fullscreen_settings': True, 'sort_picker': True, 'qwerty_keyboard': True, 'controller_glyphs': True, 'audio_system_main_stereo': True, 'copy_reserve_bytes': 0, 'copy_destination_prefill': False, 'copy_source_content_passes': 1, 'copy_destination_hash_passes': 0,
               'live_transfer_speed':True,'recent_window_eta':True,'direct_pkg_install':True,'phone_pkg_staging':True,'phone_install_modes':['fast','phone-direct'],'phone_install_default':'fast','optional_phone_installer_transport':'loopback-http','direct_phone_staging_copy':False,'phone_direct_boost_chunk_bytes':1048576,'phone_direct_compat_chunk_bytes':262144,'phone_direct_compat_queue_slots':2,'phone_direct_boost_queue_slots':4,'phone_direct_source_readers':1,'phone_direct_max_pipeline_buffer_bytes':16777216,'phone_direct_boost_uses_saved_setting':True,'phone_direct_large_rejection_fallback':'before-data-only','direct_phone_external_server_required':False,'direct_phone_network_apis_optional':True,'installer_loopback_only':False,'installer_network_required':False,'installer_transport':'native-storage','saved_pkg_retained':False,'phone_install_copy_cleanup_after_success':True,'phone_install_copy_cleanup_after_failure':True,'persistent_paste_slot':True,'non_pkg_properties_only':True,'mtp_session_reopen_recovery':True,'quick_copy_verification':True,'live_directory_refresh':True,'new_folder':True,'settings_disabled':True,'installer_source_preserved':True,
@@ -117,10 +156,10 @@ def main():
               'device_connection_chimes': True, 'discovery_phone_names': True, 'automatic_device_watch': True, 'device_poll_ms': 100, 'retained_phone_session': True, 'loading_delay_ms': 180,
               'process_filesystem_access': True, 'access_profile': 'HEN syscall 11 / runtime process checks / original Unix identity with libjbc Sony capacity credentials', 'capacity_unknown_policy': 'checked-io', 'cross_firmware_hardware_verified': False, 'libjbc_commit': '835fe016ff0ae5dd89b9249f39cc0fe093fd07dd', 'mtp_tests_enabled': True, 'interactive_browser_enabled': True, 'verified_copy_enabled': True, 'copy_private_directory': True, 'copy_descriptor_checks': True, 'copy_absolute_open': True, 'clipboard_operations': True, 'phone_to_native_paste': True, 'native_copy_move_delete': True, 'phone_delete': True, 'direct_usb_probe': True, 'device_drawer': True, 'mounted_usb_browsing': True, 'internal_browsing': True, 'modern_explorer_ui': True, 'outline_font': 'Noto Sans Light OFL', 'recursive_folder_copy': True, 'folder_shared_reserve': False, 'copy_staging_directory': '/data/psmtp/copies', 'copy_readable_output': True, 'copy_native_stat_abi': True, 'copy_allocated_capacity': False, 'usbd_review_sha256':'9cc9d4b4021b66dab5c09ada373cdd042d68e23b5de1ca515d50b82abec28bff', 'sdk': str(sdk),
               'sdk_files_sha256': {p: sha(sdk/p) for p in ['include/orbis/Usbd.h', 'include/orbis/_types/libusb.h',
-                  'include/orbis/libkernel.h', 'include/orbis/AudioOut.h', 'include/orbis/_types/audio_out.h', 'include/orbis/VideoOut.h', 'include/orbis/Pad.h',
+                  'include/orbis/libkernel.h', 'include/orbis/AudioOut.h', 'include/orbis/_types/audio_out.h', 'include/orbis/VideoOut.h', 'include/orbis/GnmDriver.h', 'include/orbis/Pad.h',
                   'include/orbis/UserService.h', 'include/orbis/AppInstUtil.h', 'include/orbis/_types/appinst_util.h', 'include/orbis/Sysmodule.h', 'include/orbis/SystemService.h', 'include/orbis/_types/sysmodule.h',
                   'include/orbis/_types/kernel.h', 'include/sys/stat.h', 'include/bits/stat.h', 'include/sys/statfs.h', 'include/bits/statfs.h', 'include/fcntl.h', 'include/bits/fcntl.h', 'include/unistd.h', 'include/bits/alltypes.h', 'include/stb/stb_image.h', 'include/stb/stb_truetype.h', 'lib/crt1.o', 'lib/libc.a',
-                  'lib/libkernel.so', 'lib/libSceAudioOut.so', 'lib/libSceVideoOut.so', 'lib/libScePad.so', 'lib/libSceUserService.so', 'lib/libSceSysmodule.so', 'lib/libSceSystemService.so', 'link.x']},
+                  'lib/libkernel.so', 'lib/libSceAudioOut.so', 'lib/libSceVideoOut.so', 'lib/libSceGnmDriver.so', 'lib/libScePad.so', 'lib/libSceUserService.so', 'lib/libSceSysmodule.so', 'lib/libSceSystemService.so', 'link.x']},
               'sources_sha256': {p: sha(ROOT/p) for p in source_inputs}, 'steps': []}
     env = os.environ.copy()
     env['OO_PS4_TOOLCHAIN'] = str(sdk)
@@ -164,9 +203,14 @@ def main():
     report['compiler_version'] = run('compiler version',cc+['--version']).strip()
     report['compiler_sha256'] = sha(cc[0]) if Path(cc[0]).is_file() else None
     flags = ['-target', target, '-std=c99', '-D_POSIX_C_SOURCE=200809L', '-DPSMTP_EXPERIMENTAL_PS4_USB=1',
-             '-nostdinc', '-I'+str(ROOT/'include'), '-isystem', str(sdk/'include'),
+             '-nostdinc', '-I'+str(ROOT/'include'), '-isystem', str(bearssl/'inc'), '-isystem', str(ROOT/'third_party/qrcodegen'), '-isystem', str(sdk/'include'),
              '-isystem', str(sdk/'include/orbis/_types'), '-isystem', str(sdk/'include/stb'), '-fPIC', '-funwind-tables',
              '-fshort-wchar', '-fstack-protector-strong', '-Wall', '-Wextra', '-Werror', '-O2']
+    if args.firebase_database_url:
+        base = args.firebase_database_url.rstrip('/')
+        if not re.fullmatch(r'https://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:firebaseio\.com|firebasedatabase\.app)', base):
+            parser.error('Use the HTTPS Realtime Database base URL from Firebase Console')
+        flags += ['-DPSMTP_UPDATE_URL="'+base+'/updates/ps4/stable.json"']
     if not args.production:
         flags += ['-DPSMTP_DIAGNOSTIC_BUILD="'+args.diagnostic_build+'"',
                   '-ffile-prefix-map='+str(ROOT)+'=.', '-fdebug-prefix-map='+str(ROOT)+'=.']
@@ -174,8 +218,22 @@ def main():
         flags += ['-DPSMTP_PRODUCTION=1','-DNDEBUG','-g0','-fno-ident',
                   '-ffile-prefix-map='+str(ROOT)+'=.', '-fdebug-prefix-map='+str(ROOT)+'=.',
                   '-include',str(ROOT/'src/ps4/release_config.h')]
+    ar = shutil.which('llvm-ar') or shutil.which('ar')
+    if ar:
+        archive_tool = [ar]
+    else:
+        local_zig = ROOT/'.tools/ziglang'/('zig.exe' if os.name == 'nt' else 'zig')
+        zig_exe = str(local_zig) if local_zig.is_file() else shutil.which('zig')
+        if not zig_exe:
+            raise SystemExit('Install llvm-ar or Zig for the static libraries.')
+        archive_tool = [zig_exe, 'ar']
+    archive_headers, archive_libraries, archive_notices, archive_sources = build_archives(
+        output/'archive-dependencies', cc, target, sdk, archive_tool)
+    report['archive_dependencies_sha256'] = archive_sources
+    for header_dir in archive_headers:
+        flags += ['-isystem', str(header_dir)]
     objects = []
-    active_sources = [s for s in SOURCES if not args.production or s not in ('src/browser.c','src/diagnostic.c')]
+    active_sources = [s for s in SOURCES if not args.production or s not in ('src/browser.c','src/diagnostic.c')] + qr_sources
     report['compiled_sources'] = active_sources
     report['stack_protection'] = {
         'flag': '-fstack-protector-strong',
@@ -186,14 +244,36 @@ def main():
     for source in active_sources:
         obj = output / (source.replace('/', '_') + '.o')
         compile_flags=flags
+        if source == 'src/ps4/update_client.c':
+            compile_flags=flags+['-I'+str(output)]
         if source.startswith('third_party/libjbc/'):
             compile_flags=flags+['-std=gnu99','-ffreestanding','-mno-red-zone','-mno-sse','-mno-sse2','-mno-mmx','-fno-asynchronous-unwind-tables','-fno-unwind-tables','-Wno-unused-parameter']
         if source in STACK_PROTECTOR_EXCLUSIONS:
             compile_flags=compile_flags+['-fno-stack-protector']
         run('compile '+source, cc+compile_flags+['-c', ROOT/source, '-o', obj])
         objects.append(obj)
+    bear_dir = output/'bearssl'
+    bear_dir.mkdir(exist_ok=True)
+    third_flags = flags + ['-I'+str(bearssl/'src'), '-DBR_USE_URANDOM=0', '-DBR_USE_UNIX_TIME=0',
+                           '-DBR_USE_GETENTROPY=0', '-DBR_RDRAND=0', '-DBR_AES_X86NI=0', '-DBR_POWER8=0',
+                           '-DBR_SSE2=0', '-DBR_PSMTP_PORTABLE_BUILD=1', '-Wno-error']
+
+    def compile_bear(path):
+        obj = bear_dir / (path.relative_to(bearssl).as_posix().replace('/', '_') + '.o')
+        result = subprocess.run([*cc, *third_flags, '-c', str(path), '-o', str(obj)], capture_output=True, text=True)
+        if result.returncode:
+            raise SystemExit(f'BearSSL compile failed for {path.name}: {result.stderr}')
+        return obj
+
+    print('compile BearSSL TLS library', flush=True)
+    with ThreadPoolExecutor(max_workers=min(12, os.cpu_count() or 4)) as executor:
+        bear_objects = list(executor.map(compile_bear, sorted((bearssl/'src').rglob('*.c'))))
+    archive = bear_dir/'libbearssl.a'
+    archive.unlink(missing_ok=True)
+    # Relative paths keep the Windows command line below its length limit.
+    run('archive BearSSL',archive_tool+['rcs', archive.name]+[obj.name for obj in bear_objects],cwd=bear_dir)
     elf = output/'psmtp.elf'
-    libs = [str(sdk/'lib/libc.a')] + ['-l'+x for x in ['kernel', 'SceAudioOut', 'SceVideoOut', 'ScePad', 'SceUserService', 'SceSysmodule', 'SceSystemService']]
+    libs = [*map(str,archive_libraries),str(archive),str(sdk/'lib/libc.a')] + ['-l'+x for x in ['kernel', 'SceAudioOut', 'SceVideoOut', 'SceGnmDriver', 'ScePad', 'SceUserService', 'SceSysmodule', 'SceSystemService','SceNet','SceNetCtl']]
     standalone = args.ld or (str(llvm18.parent/'ld.lld.exe') if llvm18.exists() and not args.cc else shutil.which('ld.lld'))
     if standalone or is_zig:
         linker = [standalone] if standalone else [cc[0], 'ld.lld']
@@ -218,10 +298,10 @@ def main():
     report['elf'] = {'sha256': sha(elf), 'bytes': len(data), 'type': 'ELF64 x86-64 ET_DYN'}
     (output/'build-report.json').write_text(json.dumps(report, indent=2)+'\n')
     if args.package:
-        package(sdk, output, run, report)
+        package(sdk, output, run, report, archive_notices)
     print('Built application:', elf)
 
-def package(sdk, output, run, report):
+def package(sdk, output, run, report, archive_notices):
     platform = 'windows' if os.name == 'nt' else ('macos' if sys.platform=='darwin' else 'linux')
     ext = '.exe' if os.name=='nt' else ''
     tools = sdk/'bin'/platform
@@ -232,7 +312,16 @@ def package(sdk, output, run, report):
     for tool in [fself,pkgtool,gp4tool]:
         if not tool.is_file(): raise SystemExit('Missing packaging tool: '+str(tool))
     stage = output/'package'; (stage/'sce_sys/about').mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ROOT/'distribution/LICENSES.txt',stage/'LICENSES.txt')
+    notices = (ROOT/'distribution/LICENSES.txt').read_bytes()
+    bear_notice = (ROOT/'third_party/bearssl/LICENSE.txt').read_bytes()
+    qr_notice = (ROOT/'third_party/qrcodegen/LICENSE').read_bytes()
+    music_notice = (ROOT/'third_party/dr_libs/NOTICE.txt').read_bytes() + b'\n' + (ROOT/'third_party/dr_libs/LICENSE').read_bytes()
+    theme_font_notice = (ROOT/'assets/fonts/Urbanist-OFL.txt').read_bytes()
+    ca_notice = (ROOT/'third_party/mozilla-ca/LICENSE.txt').read_bytes()
+    (stage/'LICENSES.txt').write_bytes(notices + b'\n\nBearSSL 0.6 (https://www.bearssl.org/download.html)\n\n' +
+                                     bear_notice + b'\n\n' + qr_notice + b'\n\n' + music_notice + archive_notices +
+                                     b'\n\nUrbanist (https://github.com/coreyhu/Urbanist)\n\n' + theme_font_notice +
+                                     b'\n\nMozilla CA bundle (https://curl.se/ca/cacert-2026-11-05.pem)\n\n' + ca_notice)
     run('convert ELF to OELF and fake SELF', [fself,'-in','psmtp.elf','-out','psmtp.oelf',
         '-eboot','package/eboot.bin','-paid','0x3800000000000011'],cwd=output)
     data = (stage/'eboot.bin').read_bytes()

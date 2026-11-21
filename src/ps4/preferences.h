@@ -6,7 +6,8 @@
 #define PSMTP_PREFERENCES_PATH PSMTP_PREFERENCES_DIRECTORY "/preferences.cfg"
 #define PSMTP_PREFERENCES_TEMP PSMTP_PREFERENCES_DIRECTORY "/preferences.tmp"
 enum {PSMTP_INSTALL_FAST=0,PSMTP_INSTALL_PHONE_DIRECT=1};
-typedef struct {int list_view,sort_mode,speed_boost,install_mode;} psmtp_preferences;
+enum {PSMTP_THEME_LIGHT=0,PSMTP_THEME_DARK,PSMTP_THEME_CLASSIC,PSMTP_THEME_COUNT};
+typedef struct {int list_view,sort_mode,speed_boost,install_mode,theme;} psmtp_preferences;
 void psmtp_preferences_defaults(psmtp_preferences *);
 /* Missing file is normal. Invalid/unreadable data leaves all defaults intact. */
 int psmtp_preferences_load(psmtp_preferences *,FILE *);

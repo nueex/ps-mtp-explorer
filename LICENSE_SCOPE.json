@@ -59,9 +59,12 @@
     "include/psmtp/device_watch.h",
     "include/psmtp/diag_log.h",
     "include/psmtp/diagnostic.h",
+    "include/psmtp/direct_download.h",
     "include/psmtp/http_range.h",
     "include/psmtp/install_error.h",
     "include/psmtp/keyboard.h",
+    "include/psmtp/lan_pair.h",
+    "include/psmtp/lan_spake.h",
     "include/psmtp/locations.h",
     "include/psmtp/log_paths.h",
     "include/psmtp/metadata.h",
@@ -86,9 +89,13 @@
     "src/device_watch.c",
     "src/diag_log.c",
     "src/diagnostic.c",
+    "src/direct_download.c",
     "src/http_range.c",
+    "src/image_scale.h",
     "src/install_error.c",
     "src/keyboard.c",
+    "src/lan_pair.c",
+    "src/lan_spake.c",
     "src/locations.c",
     "src/metadata.c",
     "src/mtp.c",
@@ -96,6 +103,11 @@
     "src/navigator.c",
     "src/pkg.c",
     "src/preview_decode_budget.h",
+    "src/ps4/android_accessory.h",
+    "src/ps4/archive_crypto_config.h",
+    "src/ps4/archive_job.c",
+    "src/ps4/archive_job.h",
+    "src/ps4/archive_ps4_config.h",
     "src/ps4/console_render.c",
     "src/ps4/console_render.h",
     "src/ps4/controller.c",
@@ -116,10 +128,20 @@
     "src/ps4/file_store.h",
     "src/ps4/ime.c",
     "src/ps4/ime.h",
+    "src/ps4/lan_identity.c",
+    "src/ps4/lan_identity.h",
+    "src/ps4/lan_server.c",
+    "src/ps4/lan_server.h",
     "src/ps4/lifecycle.c",
     "src/ps4/lifecycle.h",
     "src/ps4/main.c",
+    "src/ps4/media_player.c",
+    "src/ps4/media_player.h",
     "src/ps4/monotonic.h",
+    "src/ps4/mp4_aac.c",
+    "src/ps4/mp4_aac.h",
+    "src/ps4/music_decoder.c",
+    "src/ps4/music_decoder.h",
     "src/ps4/native_sync.h",
     "src/ps4/notify.c",
     "src/ps4/notify.h",
@@ -142,6 +164,7 @@
     "src/ps4/storage_space.h",
     "src/ps4/system_dialog.c",
     "src/ps4/system_dialog.h",
+    "src/ps4/theme_colors.inc",
     "src/ps4/ui_draw.c",
     "src/ps4/ui_draw.h",
     "src/ps4/ui_font.c",
@@ -149,7 +172,11 @@
     "src/ps4/update_client.c",
     "src/ps4/update_client.h",
     "src/ps4/update_config.h",
+    "src/ps4/usb_download.c",
+    "src/ps4/usb_download.h",
     "src/ps4/usb_ps4.c",
+    "src/ps4/viewer.c",
+    "src/ps4/viewer.h",
     "src/ps4/work.c",
     "src/ps4/work.h",
     "src/ps4/work_io.h",
@@ -168,10 +195,21 @@
     "tools/inspect_ps4.py",
     "tools/package_identity.py",
     "tools/prepare_clean_icons.mjs",
+    "tools/ps4_archives.py",
     "tools/ps4_runtime.py",
     "tools/verify_production_release.py"
   ],
   "mixed_files": [
+    {
+      "path": "assets/explorer-classic.png",
+      "covered": "Only original nueex UI/design, authored geometric graphics, project title/launcher and generated representation of those owned portions; GPL-3.0-or-later.",
+      "excluded": "PS4/Sony branding, Bloodborne artwork, unresolved demo scenery and other third-party expression. See LICENSING_ASSETS.json."
+    },
+    {
+      "path": "assets/explorer-dark.png",
+      "covered": "Only original nueex UI/design, authored geometric graphics, project title/launcher and generated representation of those owned portions; GPL-3.0-or-later.",
+      "excluded": "PS4/Sony branding, Bloodborne artwork, unresolved demo scenery and other third-party expression. See LICENSING_ASSETS.json."
+    },
     {
       "path": "assets/explorer.png",
       "covered": "Only original nueex UI/design, authored geometric graphics, project title/launcher and generated representation of those owned portions; GPL-3.0-or-later.",
@@ -269,6 +307,14 @@
       "terms": "Noto/SIL OFL-1.1 font material or its provenance/license text; no nueex relicensing."
     },
     {
+      "path": "assets/fonts/Urbanist-OFL.txt",
+      "terms": "Urbanist/SIL OFL-1.1 font material or its license text; no nueex relicensing."
+    },
+    {
+      "path": "assets/fonts/Urbanist-Regular.ttf",
+      "terms": "Urbanist/SIL OFL-1.1 font material or its license text; no nueex relicensing."
+    },
+    {
       "path": "assets/icons/ps4-wordmark.png",
       "terms": "Externally owned or unresolved artwork; no project GPL/MIT grant. See LICENSING_ASSETS.json."
     },
@@ -289,6 +335,18 @@
       "terms": "Noto/SIL OFL-1.1 font material or its provenance/license text; no nueex relicensing."
     },
     {
+      "path": "src/ps4/theme_font_data.inc",
+      "terms": "Urbanist/SIL OFL-1.1 font material or its license text; no nueex relicensing."
+    },
+    {
+      "path": "third_party/bearssl/",
+      "terms": "Unmodified upstream BearSSL 0.6 library (MIT); no nueex relicensing."
+    },
+    {
+      "path": "third_party/dr_libs/",
+      "terms": "Unmodified upstream dr_libs audio decoders (MIT-0 or Public Domain); no nueex relicensing."
+    },
+    {
       "path": "third_party/libjbc/NOTICE.txt",
       "terms": "Upstream libjbc or its preserved attribution/provenance; redistribution unresolved. Original notice prose does not license the upstream code."
     },
@@ -303,6 +361,14 @@
     {
       "path": "third_party/libjbc/provenance.json",
       "terms": "Upstream libjbc or its preserved attribution/provenance; redistribution unresolved. Original notice prose does not license the upstream code."
+    },
+    {
+      "path": "third_party/mozilla-ca/",
+      "terms": "Mozilla public CA bundle from curl (MPL-2.0); no nueex relicensing."
+    },
+    {
+      "path": "third_party/qrcodegen/",
+      "terms": "Unmodified upstream Project Nayuki QR Code generator (MIT); no nueex relicensing."
     },
     {
       "path": "third_party/stb/stb_image.h",

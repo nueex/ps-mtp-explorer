@@ -37,17 +37,38 @@ int psmtp_ui_compare(int mode,const char *an,int af,uint64_t as,const char *ad,c
     else if(mode==PSMTP_SORT_TYPE)result=psmtp_ui_name_compare(psmtp_ui_kind(an,af),psmtp_ui_kind(bn,bf));
     if(!result)result=psmtp_ui_name_compare(an,bn)*(mode==PSMTP_SORT_NAME_DESC?-1:1);return result;
 }
+psmtp_file_kind psmtp_ui_file_kind(const char *name,int folder) {
+    static const char *const extensions[PSMTP_KIND_COUNT][18]={
+        [PSMTP_KIND_TEXT]={"txt","log","md","nfo","ini"},
+        [PSMTP_KIND_IMAGE]={"jpg","jpeg","png","bmp","gif","tga","webp","heic","heif","avif","svg","tif","tiff","ico"},
+        [PSMTP_KIND_VIDEO]={"mp4","m4v","mov","mkv","webm","avi","ts","m2ts","mpg","mpeg","3gp","wmv","flv","vob"},
+        [PSMTP_KIND_AUDIO]={"mp3","m4a","aac","wav","flac","ogg","opus","wma","aiff","mid","midi","alac","mka"},
+        [PSMTP_KIND_PACKAGE]={"pkg"},
+        [PSMTP_KIND_ARCHIVE]={"zip","7z","rar","tar","gz","bz2","xz","lz4","zst","cpio","ar","xar","tgz","tbz2","txz","cab","lzma"},
+        [PSMTP_KIND_SHEET]={"xls","xlsx","xlsm","xlsb","xlt","xltx","ods","csv"},
+        [PSMTP_KIND_PDF]={"pdf"},
+        [PSMTP_KIND_DOCUMENT]={"doc","docx","docm","odt","rtf","pages","epub"},
+        [PSMTP_KIND_SLIDES]={"ppt","pptx","pptm","pps","ppsx","odp","key"},
+        [PSMTP_KIND_DISK]={"iso","img","vhd","vhdx","dmg","nrg"},
+        [PSMTP_KIND_INSTALLER]={"apk","apks","xapk","ipa","exe","msi","deb","rpm"}
+    };
+    if(folder)return PSMTP_KIND_FOLDER;
+    const char *ext=name?strrchr(name,'.'):NULL;
+    if(!ext || !ext[1])return PSMTP_KIND_FILE;
+    for(int kind=PSMTP_KIND_TEXT;kind<PSMTP_KIND_COUNT;++kind)
+        for(size_t i=0;i<sizeof(extensions[kind])/sizeof(extensions[kind][0]) && extensions[kind][i];++i)
+            if(!psmtp_ui_name_compare(ext+1,extensions[kind][i]))return (psmtp_file_kind)kind;
+    return PSMTP_KIND_FILE;
+}
 const char *psmtp_ui_kind(const char *name,int folder) {
-    const char *ext;
-    if(folder) return "Folder";
-    ext=strrchr(name,'.'); if(!ext) return "File";
-    if(!psmtp_ui_name_compare(ext,".pkg")) return "Package";
-    if(!psmtp_ui_name_compare(ext,".jpg") || !psmtp_ui_name_compare(ext,".png") || !psmtp_ui_name_compare(ext,".jpeg")) return "Image";
-    if(!psmtp_ui_name_compare(ext,".mp4") || !psmtp_ui_name_compare(ext,".mkv") || !psmtp_ui_name_compare(ext,".mov") || !psmtp_ui_name_compare(ext,".m4v")) return "Video";
-    if(!psmtp_ui_name_compare(ext,".mp3") || !psmtp_ui_name_compare(ext,".flac")) return "Audio";
-    if(!psmtp_ui_name_compare(ext,".zip") || !psmtp_ui_name_compare(ext,".7z")) return "Archive";
-    if(!psmtp_ui_name_compare(ext,".txt") || !psmtp_ui_name_compare(ext,".log")) return "Text";
-    return "File";
+    static const char *const labels[PSMTP_KIND_COUNT]={
+        [PSMTP_KIND_FILE]="File",[PSMTP_KIND_FOLDER]="Folder",[PSMTP_KIND_TEXT]="Text",
+        [PSMTP_KIND_IMAGE]="Image",[PSMTP_KIND_VIDEO]="Video",[PSMTP_KIND_AUDIO]="Audio",
+        [PSMTP_KIND_PACKAGE]="Package",[PSMTP_KIND_ARCHIVE]="Archive",[PSMTP_KIND_SHEET]="Spreadsheet",
+        [PSMTP_KIND_PDF]="PDF",[PSMTP_KIND_DOCUMENT]="Document",[PSMTP_KIND_SLIDES]="Presentation",
+        [PSMTP_KIND_DISK]="Disk image",[PSMTP_KIND_INSTALLER]="Installer"
+    };
+    return labels[psmtp_ui_file_kind(name,folder)];
 }
 void psmtp_ui_extension(char out[12],const char *name,int pkg) {
     const char *dot=strrchr(name,'.');size_t i,n;

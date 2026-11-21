@@ -1,7 +1,7 @@
 # Build PS MTP Explorer
 
 The repository includes the source, libjbc integration, fonts, and artwork
-for version **2.0.0**, with title ID `NUEX00001` and PS4 SFO version `02.00`.
+for version **3.0**, with title ID `NUEX00001` and PS4 SFO version `03.00`.
 External compiler and SDK binaries are installed separately.
 
 ## Requirements
@@ -11,6 +11,9 @@ External compiler and SDK binaries are installed separately.
   packaging tools, and `samples/hello_world` runtime/about modules.
 - **Clang and LLD 18.1.8**, the release compiler/linker. Install LLVM
   separately; the SDK bootstrap below does not install LLVM.
+- **CMake, Ninja, and llvm-ar or Zig** for the static archive libraries. The
+  first PS4 build downloads the pinned sources and checks their SHA-256 digests.
+  Subsequent builds can reuse `.tools/downloads/ps4-archive` offline.
 - For **Windows packaging**, an x64 .NET runtime. The SDK's PkgTool targets
   .NET Core 3.0; the build enables major-version roll-forward and has been
   verified with .NET 9. Check with `dotnet --list-runtimes`.
@@ -119,8 +122,8 @@ Historical MIT grants and all third-party exclusions remain. Successful builds
 do not establish redistribution permission for inherited libjbc code or
 excluded artwork/branding; the complete application remains uncleared.
 
-Normal builds regenerate the embedded font from the bundled, hash-checked
-`assets/fonts/NotoSans-Light.ttf`. Artwork is already embedded in the
+Normal builds regenerate the embedded Noto Sans Light and Urbanist fonts from
+the bundled, hash-checked files under `assets/fonts`. Artwork is embedded in the
 committed `src/ps4/reference_assets.inc`; no asset-generation step is needed.
 Editable SVGs and PNGs plus provenance remain in `assets/`.
 

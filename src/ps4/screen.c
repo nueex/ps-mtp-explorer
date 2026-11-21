@@ -9,9 +9,11 @@
  */
 #include "screen.h"
 #include "controller.h"
+#include "lifecycle.h"
 #ifdef PSMTP_TEST_SCREEN
 #include "ps4_screen_test_api.h"
 #else
+#include <orbis/GnmDriver.h>
 #include <orbis/libkernel.h>
 #include <orbis/VideoOut.h>
 #include <orbis/Pad.h>
@@ -60,6 +62,11 @@ int psmtp_screen_open(FILE *log) {
     psmtp_controller_open(log);
     return 0;
 }
+void psmtp_screen_submit_done(void) {
+    /* The system waits for this acknowledgement before suspending the title.
+     * Native video decoding can use the GPU even though this renderer is CPU-only. */
+    if(screen.registered)(void)sceGnmSubmitDone();
+}
 void psmtp_screen_draw(const diag_log *log,size_t scroll,const char *status,int names,const char *save_status,const psmtp_console_selection *selection,const mtp_navigator *browser) {
     unsigned tries; int32_t rc;
     if(!screen.registered || screen.display_error) return;
@@ -89,13 +96,21 @@ void psmtp_screen_draw(const diag_log *log,size_t scroll,const char *status,int 
         fprintf(screen.log,"stage=render-timing frames=%u elapsed-us=%" PRIu64 " average-render-us=%" PRIu64 " view=%d cached-frames=%u upload-bytes=%" PRIu64 " full-uploads=%u\n",frames,elapsed,average,selection?selection->view:-1,cached,uploaded,full);
     }}
 #endif
+    psmtp_screen_submit_done();
+#ifndef PSMTP_TEST_SCREEN
+    if(psmtp_lifecycle_requested())return;
+#endif
     rc=sceVideoOutSubmitFlip(screen.video,screen.frame,ORBIS_VIDEO_OUT_FLIP_VSYNC,++screen.flip);
     if(rc) { screen.display_error=rc; return; }
     for(tries=0;tries<500;++tries) {
+#ifndef PSMTP_TEST_SCREEN
+        if(psmtp_lifecycle_requested())return;
+#endif
         OrbisVideoOutFlipStatus fs; memset(&fs,0,sizeof(fs));
         rc=sceVideoOutGetFlipStatus(screen.video,&fs);
         if(rc) { screen.display_error=rc; return; }
         if(fs.flipArg==screen.flip) break;
+        if(!sceGnmAreSubmitsAllowed())psmtp_screen_submit_done();
         sceKernelUsleep(1000);
     }
     if(tries==500) { screen.display_error=-1; return; } /* local display deadline */
@@ -109,6 +124,7 @@ int32_t psmtp_screen_pad_error(void){return psmtp_controller_error();}
 int32_t psmtp_screen_error(void) { return screen.display_error; }
 int psmtp_screen_shutdown(FILE *log,int release_user) {
     int32_t rc,first=0;
+    psmtp_screen_submit_done();
     psmtp_console_render_close();
     psmtp_font_close();
     ui_draw_close();

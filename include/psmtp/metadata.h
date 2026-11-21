@@ -44,9 +44,11 @@ typedef struct {
     unsigned decode_allocations,decode_started;
 } psmtp_metadata;
 int psmtp_metadata_load(psmtp_meta_reader *,const char *,psmtp_metadata *);
+int psmtp_metadata_mp4_audio_codec(psmtp_meta_reader *,uint32_t *);
 int psmtp_metadata_image(const uint8_t *,size_t,psmtp_metadata *);
 int psmtp_metadata_image_reader(psmtp_meta_reader *,uint64_t,uint64_t,psmtp_metadata *);
 void psmtp_metadata_free(psmtp_metadata *);
+int psmtp_decode_still(const uint8_t *,size_t,uint32_t **,unsigned *,unsigned *);
 const char *psmtp_metadata_preview_reason(psmtp_preview_reason);
 /* Installs the shared fallback and a reason without allocating memory. */
 void psmtp_metadata_image_failed(psmtp_metadata *,psmtp_preview_reason,int);

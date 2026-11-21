@@ -35,7 +35,7 @@ static int space_kernel(const char *name,size_t cap) {
         !strcmp(leaf,"libkernel_sys") || !strcmp(leaf,"libkernel_sys.sprx") || !strcmp(leaf,"libkernel_sys.prx") ||
         !strcmp(leaf,"libkernel_web") || !strcmp(leaf,"libkernel_web.sprx") || !strcmp(leaf,"libkernel_web.prx");
 }
-int psmtp_native_space(const char *root,const char *path,uint64_t *available,uint64_t *block,FILE *log) {
+static int native_space(const char *root,const char *path,uint64_t *available,uint64_t *block,uint64_t *total,FILE *log) {
     static const char *names[]={"_fstatfs","fstatfs"};
     OrbisKernelModule modules[128];size_t count=0,i,j;int fd=-1,rc=MTP_SPACE_UNKNOWN,native_rc=-1,query_errno=0;
     union {space_prefix prefix;uint8_t bytes[4096];} data={0};
@@ -56,9 +56,21 @@ int psmtp_native_space(const char *root,const char *path,uint64_t *available,uin
     }
 done:
     if(fd>=0 && close(fd)){rc=MTP_FILESYSTEM;query_errno=errno;}
+    if(total){
+        *total=0;
+        if(!rc && data.prefix.blocks<=UINT64_MAX / *block)*total=data.prefix.blocks * *block;
+        else if(!rc)rc=MTP_SPACE_UNKNOWN;
+    }
     if(rc)*available=*block=0;
     if(log)fprintf(log,"stage=storage-space status=%d available=%" PRIu64 " block=%" PRIu64 " method=native-fstatfs native-status=%d errno=%d version=%08" PRIx32 "\n",rc,*available,*block,native_rc,query_errno,data.prefix.version);
     return rc;
+}
+int psmtp_native_space(const char *root,const char *path,uint64_t *available,uint64_t *block,FILE *log) {
+    return native_space(root,path,available,block,NULL,log);
+}
+int psmtp_native_capacity(const char *root,const char *path,uint64_t *available,uint64_t *total,FILE *log) {
+    uint64_t block;
+    return native_space(root,path,available,&block,total,log);
 }
 int psmtp_space_require(const char *root,const char *path,uint64_t required,FILE *log) {
     uint64_t available,block;int rc=psmtp_native_space(root,path,&available,&block,log),known=!rc;

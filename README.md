@@ -36,16 +36,29 @@
 | **Familiar file actions** | Copy, Move, Paste, Rename, Delete and Properties across your phone, USB drive and internal HDD. |
 | **New Folder** | Create a directory in the current writable location with the on-screen keyboard. |
 | **Direct PKG installation** | Supports installing PKGs directly through the app from your phone, USB drive or internal HDD. |
+| **Direct Download (JetBird App)** | Receive downloads directly on PS4 over USB or certificate-pinned Wireless (QR or 6-digit pairing), download directly over HTTPS, and use Parallel Install while downloading. |
+| **Built-in media & file viewers** | View images with zoom and pan, view and edit UTF-8 text files with the PlayStation keyboard, and play videos and music (MP3, FLAC, WAV) directly in the app. |
+| **Archive manager** | Extract ZIP, RAR/RAR5, 7z, TAR, Gzip, Bzip2, XZ, Zstandard and CPIO archives, and compress files or folders across 12 formats with optional AES-256 password protection. |
+| **Multi-select & batch actions** | Select multiple files and folders with **Square** to copy, move, delete or compress in a single batch. |
+| **Three themes** | Switch between **Light**, **Dark** and **Classic** themes in Settings. |
 | **Reliable transfers** | Built-in integrity checks help protect your files during transfers. |
 | **Live updates** | Connected devices and folder contents update automatically as you manage your files. |
 | **Grid, list & details** | Switch views, inspect full paths and file properties, and see supported image previews, package artwork and available media metadata. |
 | **Seven sorting choices** | Name A–Z/Z–A, size smallest/largest, modified newest/oldest, or file type. Folders stay grouped first. |
 | **Designed for the controller** | Browse and manage your files from the controller, with an on-screen keyboard for folder and file names. |
 
+## Interface & themes
+
+PS MTP Explorer 3.0 includes **Light** (default), **Dark**, and **Classic** themes selectable in **Settings → Theme**.
+
 <p align="center">
-  <img src="assets/explorer.png" alt="PS MTP Explorer grid view with connected storage, folders and file details" width="960"><br>
-  <sub>Interface preview rendered from the app using sample files.</sub>
+  <img src="assets/explorer.png" alt="PS MTP Explorer 3.0 — Light theme" width="960"><br>
+  <sub><strong>Light theme</strong> (default) — interface preview rendered from v3.0 using sample files.</sub>
 </p>
+
+| Dark theme | Classic theme |
+| :---: | :---: |
+| ![PS MTP Explorer 3.0 — Dark theme](assets/explorer-dark.png) | ![PS MTP Explorer 3.0 — Classic theme](assets/explorer-classic.png) |
 
 ## Hardware safety
 
@@ -64,7 +77,7 @@ PS MTP Explorer uses standard USB data transfers and is electrically safe under 
 
 ### Install and open
 
-Download **[PS-MTP-Explorer-2.0.0.pkg](https://github.com/nueex/ps-mtp-explorer/releases/download/v2.0.0/PS-MTP-Explorer-2.0.0.pkg)** and install it using GoldHEN's package installer. Close PS MTP Explorer first if an earlier version is open. Version **2.0.0** updates the existing `NUEX00001` app; its PS4 `APP_VER` and `VERSION` metadata are **02.00**. Earlier [1.01](https://github.com/nueex/ps-mtp-explorer/releases/tag/v1.01) and [1.00](https://github.com/nueex/ps-mtp-explorer/releases/tag/v1.00) releases remain available.
+Build **PS MTP Explorer 3.0** using the [build instructions](BUILD.md), then install the PKG using GoldHEN's package installer. Close PS MTP Explorer before installing. The title ID is `NUEX00001`, and the PS4 `APP_VER` and `VERSION` fields are both `03.00`. [Published releases](https://github.com/nueex/ps-mtp-explorer/releases)
 
 Then:
 
@@ -106,10 +119,12 @@ For phone installations, leave enough internal space for **both the temporary PK
 | Button | Action |
 | :--- | :--- |
 | **D-pad** | Navigate files, folders, menus and storage devices. |
-| **X** | Open a folder; review installation for a PKG; show Properties for another file; confirm a selected action. |
-| **Circle** | Go back, close a dialog or cancel an operation. |
-| **Triangle / Options** | Open the Options menu. |
+| **X** | Open a folder, supported image, text, video or audio file; review installation for a PKG; show Properties for other files; confirm a selected action. |
+| **Circle** | Clear multi-selection, go back, close a dialog or cancel an operation. |
+| **Triangle / Options** | Open the Options menu (including Extract, Compress and batch actions). |
+| **Square** | Enter multi-select mode and toggle file or folder selection. |
 | **L3** | Toggle Grid / List. |
+| **R3** | Reopen a hidden transfer or Direct Download progress dialog. |
 | **L1 / R1** | Previous / next page. |
 | **L2 / R2** | Previous / next available phone storage area. |
 | **Touchpad** | Refresh devices and the current view. |
@@ -161,7 +176,7 @@ If PS MTP Explorer makes managing your PS4 easier, you can support development o
 
 ## Credits & third-party notices
 
-**Original Author: nueex — Copyright (C) 2026 nueex** (original project work). Built with [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), musl, stb and Noto Sans.
+**Original Author: nueex — Copyright (C) 2026 nueex** (original project work). Built with [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), musl, stb, dr_libs, BearSSL, libarchive, QR Code generator, Noto Sans, Urbanist and the Mozilla CA bundle.
 
 **libjbc - PS4 Jailbreak C library by sleirsgoevy, with modifications by bucanero. Provided and used with full author attribution for PS4 homebrew execution.**
 

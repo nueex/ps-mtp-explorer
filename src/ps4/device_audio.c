@@ -33,6 +33,7 @@ static void *playback(void *unused) {
     static int16_t pcm[PSMTP_CHIME_BLOCK*2];unsigned event=0;size_t frame=0;(void)unused;
     while(!stopped()) {
         int32_t rc;
+        if(psmtp_lifecycle_background()){sceKernelUsleep(10000);continue;}
         if(!event){unsigned pending=(unsigned)__atomic_exchange_n(&audio.pending,0,__ATOMIC_ACQ_REL);if(pending){event=pending&PSMTP_DEVICE_REMOVED?PSMTP_DEVICE_REMOVED:PSMTP_DEVICE_ADDED;frame=0;pending&=~event;if(pending)__atomic_fetch_or(&audio.pending,(int)pending,__ATOMIC_RELEASE);}}
         if(event)psmtp_chime_render(event==PSMTP_DEVICE_ADDED,frame,pcm,PSMTP_CHIME_BLOCK);else memset(pcm,0,sizeof(pcm));
         /* Continuous silence keeps the HDMI/main stream awake between cues.

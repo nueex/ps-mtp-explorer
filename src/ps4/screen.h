@@ -14,6 +14,8 @@
 #include <stdio.h>
 int psmtp_screen_open(FILE *fallback);
 void psmtp_screen_draw(const diag_log *, size_t scroll, const char *status, int names, const char *save_status, const psmtp_console_selection *,const mtp_navigator *);
+/* UI-thread checkpoint for display and native decoder submissions. */
+void psmtp_screen_submit_done(void);
 uint32_t psmtp_screen_buttons(void);
 uint32_t psmtp_screen_buttons_down(void);
 int psmtp_screen_pad_ready(void);

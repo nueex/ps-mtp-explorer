@@ -26,7 +26,7 @@
 struct psmtp_work {
     OrbisPthread thread;int started,done,cancel,result;
     psmtp_sync gate,mailbox,log_writer;OrbisPthread primary,io_thread;
-    int pause_requested,shutdown_requested,paused,error,separate_owner;
+    int pause_requested,shutdown_requested,paused,error,separate_owner,cancel_between_requests;
     unsigned system_epoch,flush_epoch,flushed_epoch,resume_epoch,validated_epoch,transport_epoch;
     uint64_t pause_started,pause_total,last_checkpoint;
     int (*flush)(void *),(*validate)(void *);void *io_user;
@@ -70,11 +70,13 @@ static void work_io_owner(void *user,int state){psmtp_work *w=user;if(psmtp_sync
     else {w->separate_owner=0;w->io_thread=w->primary;}
     psmtp_sync_signal_locked(&w->gate);psmtp_sync_unlock(&w->gate);
 }
-static int work_checkpoint(void *user){
-    psmtp_work *w=user;int rc;
+static int checkpoint(psmtp_work *w,int transport){
+    int rc;
     for(;;){unsigned flush_epoch,resume_epoch;int do_flush,do_validate,do_transport,file_owner,transport_owner;int (*flush)(void *),(*validate)(void *);void *io_user;
         rc=__atomic_load_n(&w->error,__ATOMIC_ACQUIRE);if(rc)return rc;
-        if(psmtp_work_cancelled(w))return MTP_CANCELLED;
+        if(psmtp_work_cancelled(w) &&
+           (!transport || !w->cancel_between_requests || __atomic_load_n(&w->shutdown_requested,__ATOMIC_ACQUIRE) ||
+            psmtp_lifecycle_requested()))return MTP_CANCELLED;
         if(psmtp_sync_lock(&w->gate))return MTP_IO;
         {uint64_t now=work_now();if(!w->pause_requested && w->last_checkpoint && now>w->last_checkpoint && now-w->last_checkpoint>=2000){++w->flush_epoch;++w->resume_epoch;}w->last_checkpoint=now;}
         do_flush=w->flushed_epoch!=w->flush_epoch;do_validate=!w->pause_requested && w->validated_epoch!=w->resume_epoch;
@@ -105,6 +107,8 @@ static int work_checkpoint(void *user){
         psmtp_sync_signal_locked(&w->gate);psmtp_sync_unlock(&w->gate);
     }
 }
+static int work_checkpoint(void *user){return checkpoint(user,1);}
+void psmtp_work_cancel_between_requests(psmtp_work *w,int enabled){w->cancel_between_requests=enabled;}
 void psmtp_work_bind_io(psmtp_work_io_scope *scope,int (*flush)(void *),int (*validate)(void *),void *user){
     psmtp_work *w=current_work;memset(scope,0,sizeof(*scope));if(!w)return;
     if(psmtp_sync_lock(&w->gate)){work_error(w,MTP_IO);return;}
@@ -148,7 +152,7 @@ void psmtp_work_cancel(psmtp_work *w){if(w){__atomic_store_n(&w->cancel,1,__ATOM
 void psmtp_work_shutdown(psmtp_work *w){if(w){__atomic_store_n(&w->shutdown_requested,1,__ATOMIC_RELEASE);__atomic_store_n(&w->cancel,1,__ATOMIC_RELEASE);psmtp_sync_wake(&w->gate);}}
 int psmtp_work_progress(void *v,enum mtp_copy_phase phase,uint64_t done,uint64_t total){
     psmtp_work *w=v;
-    if(w->started && work_checkpoint(w))return 1;
+    if(w->started && checkpoint(w,0))return 1;
     if(psmtp_sync_lock(&w->mailbox)){work_error(w,MTP_IO);return 1;}
     w->progress.phase=phase;w->progress.done=done;w->progress.total=total;w->progress.install=0;
     psmtp_sync_unlock(&w->mailbox);return psmtp_work_cancelled(w);
@@ -193,7 +197,7 @@ int psmtp_work_start(psmtp_work *w,psmtp_work_fn fn,void *user,mtp_client *clien
     memset(&w->progress,0,sizeof(w->progress));w->progress.phase=MTP_COPY_PREPARE;
     w->fn=fn;w->user=user;w->client=client;w->result=0;
     w->flush=w->validate=NULL;w->io_user=NULL;w->separate_owner=0;
-    w->last_checkpoint=0;
+    w->last_checkpoint=0;w->cancel_between_requests=0;
     w->flushed_epoch=w->flush_epoch;w->validated_epoch=w->transport_epoch=w->resume_epoch;
     if(psmtp_work_pause_requested(w))++w->flush_epoch;
     __atomic_store_n(&w->paused,0,__ATOMIC_RELEASE);__atomic_store_n(&w->error,0,__ATOMIC_RELEASE);

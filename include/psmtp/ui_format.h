@@ -12,6 +12,13 @@
 #include <stddef.h>
 #include <stdint.h>
 void psmtp_ui_size(char *,size_t,uint64_t);
+typedef enum {
+    PSMTP_KIND_FILE, PSMTP_KIND_FOLDER, PSMTP_KIND_TEXT,
+    PSMTP_KIND_IMAGE, PSMTP_KIND_VIDEO, PSMTP_KIND_AUDIO, PSMTP_KIND_PACKAGE,
+    PSMTP_KIND_ARCHIVE, PSMTP_KIND_SHEET, PSMTP_KIND_PDF, PSMTP_KIND_DOCUMENT,
+    PSMTP_KIND_SLIDES, PSMTP_KIND_DISK, PSMTP_KIND_INSTALLER, PSMTP_KIND_COUNT
+} psmtp_file_kind;
+psmtp_file_kind psmtp_ui_file_kind(const char *,int);
 const char *psmtp_ui_kind(const char *,int);
 int psmtp_ui_name_compare(const char *,const char *);
 enum {PSMTP_SORT_NAME,PSMTP_SORT_NAME_DESC,PSMTP_SORT_SIZE,PSMTP_SORT_SIZE_DESC,PSMTP_SORT_NEWEST,PSMTP_SORT_OLDEST,PSMTP_SORT_TYPE,PSMTP_SORT_COUNT};
